@@ -25,8 +25,7 @@ def get_main_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
-        f"🥗 Привет, {user.first_name}!\n\n"
-        f"Я SmartFood AI — твой персональный нутрициолог!\n\n"
+        f"🥗 Привет, {user.first_name}! Я SmartFood AI — твой персональный нутрициолог!\n"
         f"🍽 Анализ питания — опиши еду, получи КБЖУ\n"
         f"📊 Профиль — твои данные\n"
         f"💡 Советы — рекомендации\n\n"
@@ -93,21 +92,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).build()
-    
+
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🍽 Анализ питания$"), analyze_food_start)],
         states={WAITING_FOOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_food)]},
         fallbacks=[CommandHandler("cancel", cancel)]
     )
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(conv)
     app.add_handler(MessageHandler(filters.Regex("^💡 Совет дня$"), tip_of_day))
     app.add_handler(MessageHandler(filters.Regex("^ℹ️ Помощь$"), help_cmd))
     app.add_handler(MessageHandler(filters.Regex("^📊 Мой профиль$"), profile))
-    
-    logger.info("Bot started!")
+
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
