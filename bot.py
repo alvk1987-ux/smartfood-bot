@@ -1,18 +1,18 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from openai import OpenAI
 
 # ================= НАСТРОЙКИ =================
-# Вставьте сюда свои ключи
-TELEGRAM_TOKEN = "ВАШ_ТОКЕН_БОТА"
-OPENAI_API_KEY = "ВАШ_КЛЮЧ_OPENAI"
+# Бот сам возьмет ключи из переменных Railway
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Ссылка на оплату Paywall (создайте товар "VIP Меню" за 299р)
+# Ссылка на оплату Paywall
 PAYWALL_LINK = "https://paywall.pw/chef_vip" 
-ADMIN_ID = 123456789  # Ваш ID
+ADMIN_ID = 123456789  # ВПИШИТЕ СЮДА ВАШ ID В TELEGRAM!
 
 # Лимиты
 FREE_RECIPES_LIMIT = 3
@@ -28,7 +28,7 @@ def get_openai_client():
         return None
     return OpenAI(
         api_key=OPENAI_API_KEY,
-        base_url="https://api.proxyapi.ru/openai/v1" # Если нужен прокси
+        base_url="https://api.proxyapi.ru/openai/v1" # Используем прокси для РФ
     )
 
 # ================= КЛАВИАТУРЫ =================
@@ -62,6 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
     text = update.message.text
     user = update.effective_user
     uid = user.id
@@ -100,7 +101,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Эта функция доступна только VIP пользователям!\nКупите доступ за 299₽.")
             return
         
-        # Если VIP - спрашиваем детали
         context.user_data['waiting_for'] = 'weekly_plan'
         await update.message.reply_text("Напишите ваши предпочтения:\nНапример: *ПП меню на 1500 ккал* или *Бюджетное меню для студента*")
         return
@@ -110,14 +110,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📝 **Напишите список продуктов через запятую:**\n\nПример: *Яйца, помидор, старый хлеб, сыр*")
         return
 
-    # --- ОБРАБОТКА ТЕКСТА (ИНГРЕДИЕНТЫ) ---
-    
+    # --- ОБРАБОТКА ТЕКСТА ---
     waiting = context.user_data.get('waiting_for')
     
     if waiting == 'ingredients':
-        # Проверка лимитов
         if not users_db[uid]["vip"] and users_db[uid]["recipes_today"] >= FREE_RECIPES_LIMIT:
-            await update.message.reply_text("❌ **Лимит на сегодня исчерпан!**\n\nКупите VIP за 299₽ для безлимита.", reply_markup=get_main_keyboard(False))
+            await update.message.reply_text("❌ **Лимит исчерпан!**\n\nКупите VIP за 299₽ для безлимита.", reply_markup=get_main_keyboard(False))
             return
 
         ingredients = text
@@ -125,7 +123,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             client = get_openai_client()
-            prompt = f"Ты шеф-повар со звездой Мишлен. У меня есть продукты: {ingredients}. Придумай вкусный, креативный, но простой рецепт. Напиши: 1. Название блюда (с эмодзи). 2. Время готовки. 3. Ингредиенты. 4. Пошаговый рецепт. Пиши вкусно и аппетитно!"
+            prompt = f"Ты шеф-повар. У меня есть: {ingredients}. Придумай вкусный рецепт. Напиши: 1. Название. 2. Время. 3. Ингредиенты. 4. Шаги."
             
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -134,56 +132,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             recipe = response.choices[0].message.content
             
-            # Списываем лимит
             if not users_db[uid]["vip"]:
                 users_db[uid]["recipes_today"] += 1
             
             await update.message.reply_text(recipe, parse_mode=ParseMode.MARKDOWN)
-            
-            # Реклама VIP после рецепта
-            if not users_db[uid]["vip"]:
-                await update.message.reply_text("💡 Хотите меню на всю неделю с списком покупок? Жмите 'Купить VIP'!")
                 
         except Exception as e:
             logger.error(e)
-            await update.message.reply_text("Ошибка AI. Попробуйте позже.")
+            await update.message.reply_text("Ошибка AI. Проверьте токены или попробуйте позже.")
             
         context.user_data['waiting_for'] = None
         return
 
     if waiting == 'weekly_plan' and users_db[uid]["vip"]:
         preferences = text
-        await update.message.reply_text("📅 **Составляю меню и список покупок...** Это займет около 30 секунд.")
+        await update.message.reply_text("📅 **Составляю меню...**")
         
         try:
             client = get_openai_client()
-            prompt = f"Составь подробное меню на 7 дней с учетом пожеланий: {preferences}. Также в конце напиши полный список продуктов для магазина, разбитый по отделам. Оформи красиво."
-            
+            prompt = f"Составь меню на 7 дней: {preferences}. В конце напиши список продуктов."
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7
             )
-            plan = response.choices[0].message.content
-            await update.message.reply_text(plan, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(response.choices[0].message.content, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             await update.message.reply_text("Ошибка создания плана.")
             
         context.user_data['waiting_for'] = None
         return
 
-# Команда для вас (активировать VIP вручную другу или себе)
+# Активация VIP админом (для тестов)
 async def admin_activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     try:
         target_id = int(context.args[0])
-        if target_id not in users_db: users_db[target_id] = {}
+        if target_id not in users_db: users_db[target_id] = {"vip": False, "recipes_today": 0}
         users_db[target_id]["vip"] = True
         await update.message.reply_text(f"✅ VIP активирован для {target_id}")
     except:
         await update.message.reply_text("Пиши: /activate ID_ПОЛЬЗОВАТЕЛЯ")
 
 def main():
+    if not TELEGRAM_TOKEN:
+        print("ОШИБКА: Нет токена Telegram!")
+        return
+        
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
