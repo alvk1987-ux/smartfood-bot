@@ -1,34 +1,435 @@
--- Таблица пользователей
-CREATE TABLE users (
-    user_id BIGINT PRIMARY KEY,
-    name VARCHAR(100),
-    target_calories INT,
-    target_protein INT,
-    target_fats INT,
-    target_carbs INT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
+import os
+import logging
+import asyncio
+from datetime import datetime, timedelta, time
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import schedule
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from openai import OpenAI
 
--- Таблица приемов пищи
-CREATE TABLE meals (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES users(user_id),
-    meal_type VARCHAR(20), -- breakfast/lunch/dinner/snack
-    description TEXT,
-    calories INT,
-    protein FLOAT,
-    fats FLOAT,
-    carbs FLOAT,
-    meal_date DATE,
-    meal_time TIME,
-    created_at TIMESTAMP DEFAULT NOW()
-);
+# ... (предыдущие импорты и настройки)
 
--- Таблица напоминаний
-CREATE TABLE reminders (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES users(user_id),
-    reminder_type VARCHAR(20),
-    reminder_time TIME,
-    is_active BOOLEAN DEFAULT true
-);
+# Новые состояния
+WAITING_MEAL_RECORD = 5
+SETTING_REMINDERS = 6
+VIEWING_STATS = 7
+
+# Подключение к БД
+def get_db_connection():
+    """Подключение к PostgreSQL"""
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+def get_main_keyboard():
+    """Обновленная главная клавиатура"""
+    keyboard = [
+        [KeyboardButton("📝 Записать прием пищи")],
+        [KeyboardButton("📊 Моя статистика")],
+        [KeyboardButton("🧮 Рассчитать КБЖУ")],
+        [KeyboardButton("🍱 Составить меню")],
+        [KeyboardButton("⏰ Настроить напоминания")],
+        [KeyboardButton("💬 Задать вопрос AI")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# === ЗАПИСЬ ПРИЕМА ПИЩИ ===
+async def record_meal_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало записи приема пищи"""
+    keyboard = [
+        [InlineKeyboardButton("🌅 Завтрак", callback_data="meal_breakfast")],
+        [InlineKeyboardButton("🍽 Обед", callback_data="meal_lunch")],
+        [InlineKeyboardButton("🌙 Ужин", callback_data="meal_dinner")],
+        [InlineKeyboardButton("🍎 Перекус", callback_data="meal_snack")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📝 Выберите тип приема пищи:",
+        reply_markup=reply_markup
+    )
+    return WAITING_MEAL_RECORD
+
+async def meal_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора типа приема пищи"""
+    query = update.callback_query
+    await query.answer()
+    
+    meal_type = query.data.replace("meal_", "")
+    context.user_data['current_meal_type'] = meal_type
+    
+    meal_names = {
+        'breakfast': 'Завтрак',
+        'lunch': 'Обед', 
+        'dinner': 'Ужин',
+        'snack': 'Перекус'
+    }
+    
+    await query.edit_message_text(
+        f"📝 {meal_names[meal_type]}\n\n"
+        f"Опишите что вы съели:\n"
+        f"Например:\n"
+        f"• Овсянка на молоке с бананом\n"
+        f"• Куриная грудка 150г с рисом 100г\n"
+        f"• 2 яйца, тост с авокадо\n\n"
+        f"Чем подробнее — тем точнее расчет!"
+    )
+    return WAITING_MEAL_RECORD
+
+async def process_meal_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Анализ и сохранение приема пищи"""
+    meal_description = update.message.text
+    user_id = update.effective_user.id
+    meal_type = context.user_data.get('current_meal_type', 'snack')
+    
+    await update.message.reply_text("⏳ AI анализирует ваш прием пищи...")
+    
+    try:
+        client = get_client()
+        if not client:
+            raise ValueError("No API client")
+        
+        prompt = f"""
+        Проанализируй прием пищи: {meal_description}
+        
+        Рассчитай точно:
+        1. Общие калории (ккал)
+        2. Белки (г)
+        3. Жиры (г) 
+        4. Углеводы (г)
+        
+        Ответ дай в формате:
+        КАЛОРИИ: [число]
+        БЕЛКИ: [число]
+        ЖИРЫ: [число]
+        УГЛЕВОДЫ: [число]
+        
+        СОСТАВ:
+        [список продуктов с граммовками]
+        
+        ОЦЕНКА:
+        [краткая оценка приема пищи]
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ты нутрициолог. Точно рассчитываешь КБЖУ блюд."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.3
+        )
+        
+        analysis = response.choices[0].message.content
+        
+        # Парсим ответ AI для извлечения чисел
+        import re
+        calories = int(re.search(r'КАЛОРИИ:\s*(\d+)', analysis).group(1))
+        protein = float(re.search(r'БЕЛКИ:\s*([\d.]+)', analysis).group(1))
+        fats = float(re.search(r'ЖИРЫ:\s*([\d.]+)', analysis).group(1))
+        carbs = float(re.search(r'УГЛЕВОДЫ:\s*([\d.]+)', analysis).group(1))
+        
+        # Сохраняем в БД
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            INSERT INTO meals (user_id, meal_type, description, calories, protein, fats, carbs, meal_date, meal_time)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id, meal_type, meal_description, 
+            calories, protein, fats, carbs,
+            datetime.now().date(), datetime.now().time()
+        ))
+        
+        conn.commit()
+        
+        # Получаем статистику за день
+        cur.execute("""
+            SELECT 
+                SUM(calories) as total_calories,
+                SUM(protein) as total_protein,
+                SUM(fats) as total_fats,
+                SUM(carbs) as total_carbs
+            FROM meals
+            WHERE user_id = %s AND meal_date = %s
+        """, (user_id, datetime.now().date()))
+        
+        day_stats = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        # Формируем ответ
+        response_text = f"""
+✅ Прием пищи записан!
+
+📊 Анализ:
+{analysis}
+
+📈 Сегодня вы съели:
+🔥 Калории: {day_stats['total_calories']:.0f} ккал
+🥩 Белки: {day_stats['total_protein']:.1f} г
+🥑 Жиры: {day_stats['total_fats']:.1f} г
+🍞 Углеводы: {day_stats['total_carbs']:.1f} г
+
+💡 Совет: Не забудьте записать все приемы пищи для точной статистики!
+"""
+        
+        await update.message.reply_text(response_text, reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logger.error(f"Error recording meal: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка при анализе. Попробуйте описать подробнее.",
+            reply_markup=get_main_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+# === СТАТИСТИКА ===
+async def show_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ статистики питания"""
+    user_id = update.effective_user.id
+    
+    keyboard = [
+        [InlineKeyboardButton("📅 За сегодня", callback_data="stats_today")],
+        [InlineKeyboardButton("📊 За неделю", callback_data="stats_week")],
+        [InlineKeyboardButton("📈 За месяц", callback_data="stats_month")],
+        [InlineKeyboardButton("🎯 Мои цели", callback_data="stats_goals")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📊 Выберите период для статистики:",
+        reply_markup=reply_markup
+    )
+
+async def show_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ статистики за период"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    period = query.data.replace("stats_", "")
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    if period == "today":
+        date_filter = "meal_date = CURRENT_DATE"
+        period_name = "Сегодня"
+    elif period == "week":
+        date_filter = "meal_date >= CURRENT_DATE - INTERVAL '7 days'"
+        period_name = "За неделю"
+    elif period == "month":
+        date_filter = "meal_date >= CURRENT_DATE - INTERVAL '30 days'"
+        period_name = "За месяц"
+    else:
+        # Показываем цели
+        await show_goals(query, context)
+        return
+    
+    # Получаем статистику
+    cur.execute(f"""
+        SELECT 
+            COUNT(DISTINCT meal_date) as days,
+            COUNT(*) as total_meals,
+            AVG(calories) as avg_calories,
+            SUM(calories) as total_calories,
+            SUM(protein) as total_protein,
+            SUM(fats) as total_fats,
+            SUM(carbs) as total_carbs,
+            
+            -- Статистика по приемам пищи
+            COUNT(*) FILTER (WHERE meal_type = 'breakfast') as breakfasts,
+            COUNT(*) FILTER (WHERE meal_type = 'lunch') as lunches,
+            COUNT(*) FILTER (WHERE meal_type = 'dinner') as dinners,
+            COUNT(*) FILTER (WHERE meal_type = 'snack') as snacks
+        FROM meals
+        WHERE user_id = %s AND {date_filter}
+    """, (user_id,))
+    
+    stats = cur.fetchone()
+    
+    if not stats or stats['total_meals'] == 0:
+        await query.edit_message_text(
+            f"📊 {period_name}: нет данных\n\n"
+            f"Начните записывать приемы пищи!",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    days = stats['days'] or 1
+    avg_per_day_cal = stats['total_calories'] / days
+    avg_per_day_prot = stats['total_protein'] / days
+    avg_per_day_fats = stats['total_fats'] / days  
+    avg_per_day_carbs = stats['total_carbs'] / days
+    
+    response = f"""
+📊 Статистика: {period_name}
+
+📅 Дней с записями: {stats['days']}
+🍽 Всего приемов пищи: {stats['total_meals']}
+
+📈 В среднем в день:
+🔥 Калории: {avg_per_day_cal:.0f} ккал
+🥩 Белки: {avg_per_day_prot:.1f} г
+🥑 Жиры: {avg_per_day_fats:.1f} г
+🍞 Углеводы: {avg_per_day_carbs:.1f} г
+
+📝 Приемы пищи:
+🌅 Завтраков: {stats['breakfasts']}
+🍽 Обедов: {stats['lunches']}
+🌙 Ужинов: {stats['dinners']}
+🍎 Перекусов: {stats['snacks']}
+
+💡 Рекомендация: {'Отличная регулярность!' if stats['breakfasts'] >= days * 0.8 else 'Не пропускайте завтраки!'}
+"""
+    
+    await query.edit_message_text(response)
+    
+    cur.close()
+    conn.close()
+
+# === НАПОМИНАНИЯ ===
+async def setup_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Настройка напоминаний"""
+    keyboard = [
+        [InlineKeyboardButton("🌅 Завтрак (8:00)", callback_data="remind_breakfast_08")],
+        [InlineKeyboardButton("🍽 Обед (13:00)", callback_data="remind_lunch_13")],
+        [InlineKeyboardButton("🌙 Ужин (19:00)", callback_data="remind_dinner_19")],
+        [InlineKeyboardButton("💧 Вода (каждые 2 часа)", callback_data="remind_water")],
+        [InlineKeyboardButton("✅ Сохранить настройки", callback_data="remind_save")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "⏰ Настройка напоминаний\n\n"
+        "Выберите о чем напоминать:",
+        reply_markup=reply_markup
+    )
+
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Отправка напоминания"""
+    job = context.job
+    user_id = job.data['user_id']
+    reminder_type = job.data['type']
+    
+    messages = {
+        'breakfast': '🌅 Доброе утро! Не забудьте позавтракать и записать прием пищи в дневник!',
+        'lunch': '🍽 Время обеда! Запишите что съели для точной статистики.',
+        'dinner': '🌙 Время ужина! Не забудьте записать прием пищи.',
+        'water': '💧 Напоминание: выпейте стакан воды!'
+    }
+    
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=messages.get(reminder_type, 'Напоминание!'),
+        reply_markup=get_main_keyboard()
+    )
+
+# === АВТОМАТИЧЕСКИЕ ОТЧЕТЫ ===  
+async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
+    """Отправка ежедневного отчета"""
+    job = context.job
+    user_id = job.data['user_id']
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Получаем статистику за день
+    cur.execute("""
+        SELECT 
+            COUNT(*) as meals_count,
+            SUM(calories) as total_calories,
+            SUM(protein) as total_protein,
+            SUM(fats) as total_fats,
+            SUM(carbs) as total_carbs
+        FROM meals
+        WHERE user_id = %s AND meal_date = CURRENT_DATE
+    """, (user_id,))
+    
+    stats = cur.fetchone()
+    
+    if stats and stats['meals_count'] > 0:
+        # Получаем целевые показатели
+        cur.execute("""
+            SELECT target_calories, target_protein, target_fats, target_carbs
+            FROM users
+            WHERE user_id = %s
+        """, (user_id,))
+        
+        targets = cur.fetchone()
+        
+        report = f"""
+📊 Итоги дня:
+
+🍽 Приемов пищи: {stats['meals_count']}
+
+📈 Потреблено:
+🔥 Калории: {stats['total_calories']:.0f} ккал
+🥩 Белки: {stats['total_protein']:.1f} г
+🥑 Жиры: {stats['total_fats']:.1f} г
+🍞 Углеводы: {stats['total_carbs']:.1f} г
+"""
+        
+        if targets:
+            cal_percent = (stats['total_calories'] / targets['target_calories']) * 100 if targets['target_calories'] else 0
+            
+            report += f"""
+🎯 Выполнение целей: {cal_percent:.0f}%
+
+{'✅ Отличный день!' if cal_percent >= 90 and cal_percent <= 110 else '💪 Продолжайте в том же духе!'}
+"""
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=report,
+            reply_markup=get_main_keyboard()
+        )
+    
+    cur.close()
+    conn.close()
+
+# === ОБНОВЛЕННАЯ ГЛАВНАЯ ФУНКЦИЯ ===
+def main():
+    """Главная функция с расширенным функционалом"""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not found!")
+        return
+    
+    logger.info("Starting SmartFood AI Bot 2.0...")
+    
+    app = Application.builder().token(token).build()
+    
+    # Обработчик записи приема пищи
+    meal_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^📝 Записать прием пищи$"), record_meal_start)],
+        states={
+            WAITING_MEAL_RECORD: [
+                CallbackQueryHandler(meal_type_selected, pattern="^meal_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_meal_record)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    
+    # Добавляем обработчики
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(meal_conv)
+    app.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), show_statistics))
+    app.add_handler(MessageHandler(filters.Regex("^⏰ Настроить напоминания$"), setup_reminders))
+    app.add_handler(CallbackQueryHandler(show_stats_period, pattern="^stats_"))
+    
+    # ... остальные обработчики из предыдущей версии
+    
+    # Запуск
+    logger.info("Bot started successfully with diary features!")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
