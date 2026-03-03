@@ -1,25 +1,34 @@
 import os
 import logging
+import json
 import re
 from datetime import datetime, timedelta, time
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Состояния
-WAITING_KBZHU_DATA = 1
-WAITING_MENU_PREFERENCES = 2
-WAITING_FOOD_INFO = 3
-WAITING_AI_QUESTION = 4
-WAITING_MEAL_RECORD = 5
+# Файлы для хранения данных
+DATA_FILE = "user_data.json"
+MEALS_FILE = "meals_data.json"
 
-# Хранилище данных
-user_data = {}
-meals_data = {}
-reminders_data = {}
+# Загрузка/сохранение данных
+def load_data(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_data(data, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# Загружаем данные
+user_data = load_data(DATA_FILE)
+meals_data = load_data(MEALS_FILE)
 
 def get_client():
     """Клиент OpenAI через ProxyAPI"""
@@ -34,127 +43,334 @@ def get_client():
     )
     return client
 
-def get_main_keyboard():
+def get_keyboard():
     """Главная клавиатура"""
     keyboard = [
-        [KeyboardButton("📝 Записать прием пищи")],
-        [KeyboardButton("📊 Моя статистика")],
-        [KeyboardButton("🧮 Рассчитать КБЖУ"), KeyboardButton("🍱 Составить меню")],
-        [KeyboardButton("🍽 Анализ питания"), KeyboardButton("⏰ Напоминания")],
-        [KeyboardButton("💬 Задать вопрос")]
+        [KeyboardButton("🌅 Завтрак"), KeyboardButton("🍽 Обед")],
+        [KeyboardButton("🌙 Ужин"), KeyboardButton("🍎 Перекус")],
+        [KeyboardButton("💧 Выпил воду"), KeyboardButton("⚖️ Мой вес")],
+        [KeyboardButton("📊 Статистика дня"), KeyboardButton("❓ Вопрос")],
+        [KeyboardButton("🧮 Рассчитать КБЖУ"), KeyboardButton("ℹ️ Помощь")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     user = update.effective_user
-    user_id = user.id
+    user_id = str(user.id)
+    
+    # Инициализация пользователя
+    if user_id not in user_data:
+        user_data[user_id] = {
+            "name": user.first_name,
+            "created": datetime.now().isoformat(),
+            "target_calories": 2000,
+            "target_protein": 100,
+            "target_fats": 70,
+            "target_carbs": 250,
+            "weight_history": [],
+            "questions_today": 0,
+            "last_question_date": None
+        }
+        save_data(user_data, DATA_FILE)
     
     if user_id not in meals_data:
         meals_data[user_id] = []
+        save_data(meals_data, MEALS_FILE)
+    
+    # Устанавливаем напоминания
+    setup_daily_reminders(context, int(user_id))
     
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n\n"
-        f"🤖 Я SmartFood AI — твой персональный нутрициолог!\n\n"
-        f"✨ НОВЫЕ ФУНКЦИИ:\n"
-        f"📝 Дневник питания — записывайте все приемы пищи\n"
-        f"📊 Статистика — анализ за день/неделю/месяц\n"
-        f"⏰ Напоминания — не пропустите прием пищи\n\n"
-        f"Основные функции:\n"
-        f"🧮 Рассчитать КБЖУ\n"
-        f"🍱 Составить меню\n"
-        f"🍽 Анализ питания\n"
-        f"💬 Задать вопрос\n\n"
-        f"Выберите действие 👇",
-        reply_markup=get_main_keyboard()
+        f"🤖 Я твой дневник питания!\n\n"
+        f"📋 Как работаю:\n"
+        f"1️⃣ Сначала рассчитай свою норму КБЖУ\n"
+        f"2️⃣ Записывай каждый прием пищи\n"
+        f"3️⃣ В 21:00 получишь итоги дня\n"
+        f"4️⃣ Каждую пятницу напомню взвеситься\n"
+        f"5️⃣ 3 раза в день напомню пить воду\n\n"
+        f"💡 Можешь задать 10 вопросов в день\n\n"
+        f"🧮 Начни с расчета КБЖУ!",
+        reply_markup=get_keyboard()
     )
 
-# === ЗАПИСЬ ПРИЕМА ПИЩИ ===
-async def record_meal_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало записи приема пищи"""
-    keyboard = [
-        [InlineKeyboardButton("🌅 Завтрак", callback_data="meal_breakfast")],
-        [InlineKeyboardButton("🍽 Обед", callback_data="meal_lunch")],
-        [InlineKeyboardButton("🌙 Ужин", callback_data="meal_dinner")],
-        [InlineKeyboardButton("🍎 Перекус", callback_data="meal_snack")],
-        [InlineKeyboardButton("💧 Вода (250мл)", callback_data="meal_water")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+# === РАСЧЕТ КБЖУ ===
+async def calculate_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Расчет КБЖУ"""
     await update.message.reply_text(
-        "📝 Выберите тип приема:",
-        reply_markup=reply_markup
+        "🧮 Для расчета КБЖУ напиши одним сообщением:\n\n"
+        "Пол, возраст, вес, рост, активность, цель\n\n"
+        "📝 Пример:\n"
+        "Женщина, 25 лет, 60 кг, 170 см, средняя активность, похудеть\n\n"
+        "Жду твои данные..."
     )
+    context.user_data['waiting_for'] = 'kbzhu_data'
 
-async def meal_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора типа приема пищи"""
-    query = update.callback_query
-    await query.answer()
+# === ЗАПИСЬ ПРИЕМОВ ПИЩИ ===
+async def record_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запись приема пищи"""
+    meal_type = update.message.text
+    user_id = str(update.effective_user.id)
     
-    meal_type = query.data.replace("meal_", "")
-    context.user_data['current_meal_type'] = meal_type
-    
-    # Для воды сразу записываем
-    if meal_type == 'water':
-        user_id = query.from_user.id
-        if user_id not in meals_data:
-            meals_data[user_id] = []
-        
-        meals_data[user_id].append({
-            'type': 'water',
-            'description': 'Стакан воды (250 мл)',
-            'calories': 0,
-            'protein': 0,
-            'fats': 0,
-            'carbs': 0,
-            'date': datetime.now().strftime("%Y-%m-%d"),
-            'time': datetime.now().strftime("%H:%M")
-        })
-        
-        today = datetime.now().strftime("%Y-%m-%d")
-        water_count = sum(1 for meal in meals_data[user_id] 
-                         if meal['type'] == 'water' and meal['date'] == today)
-        
-        await query.edit_message_text(
-            f"✅ Записано!\n\n"
-            f"💧 Сегодня выпито: {water_count * 250} мл\n"
-            f"🎯 Рекомендация: 2000 мл/день\n"
-            f"{'✅ Норма выполнена!' if water_count >= 8 else f'Осталось: {2000 - water_count * 250} мл'}"
-        )
-        return ConversationHandler.END
-    
-    meal_names = {
-        'breakfast': '🌅 Завтрак',
-        'lunch': '🍽 Обед',
-        'dinner': '🌙 Ужин',
-        'snack': '🍎 Перекус'
+    meal_types = {
+        "🌅 Завтрак": "breakfast",
+        "🍽 Обед": "lunch",
+        "🌙 Ужин": "dinner",
+        "🍎 Перекус": "snack"
     }
     
-    await query.edit_message_text(
-        f"{meal_names[meal_type]}\n\n"
-        f"Опишите что вы съели:\n\n"
-        f"Примеры:\n"
-        f"• Овсянка с бананом\n"
-        f"• Куриная грудка 150г с рисом\n"
-        f"• Греческий салат\n"
-    )
-    return WAITING_MEAL_RECORD
+    if meal_type in meal_types:
+        context.user_data['current_meal'] = meal_types[meal_type]
+        await update.message.reply_text(
+            f"{meal_type}\n\n"
+            f"📝 Напиши что съел(а) и сколько грамм:\n\n"
+            f"Примеры:\n"
+            f"• Овсянка 100г, банан 150г, молоко 200мл\n"
+            f"• Куриная грудка 150г, рис 100г, салат 200г\n"
+            f"• Творог 200г с ягодами 50г\n\n"
+            f"Жду список продуктов..."
+        )
+        context.user_data['waiting_for'] = 'meal_description'
 
-async def process_meal_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Анализ и сохранение приема пищи"""
-    meal_description = update.message.text
-    user_id = update.effective_user.id
-    meal_type = context.user_data.get('current_meal_type', 'snack')
+# === ЗАПИСЬ ВОДЫ ===
+async def record_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запись воды"""
+    user_id = str(update.effective_user.id)
     
-    # Проверка на кнопки
-    if meal_description in ["📝 Записать прием пищи", "📊 Моя статистика", "🧮 Рассчитать КБЖУ", 
-                            "🍱 Составить меню", "🍽 Анализ питания", "⏰ Напоминания", "💬 Задать вопрос"]:
-        return ConversationHandler.END
+    today = datetime.now().strftime("%Y-%m-%d")
     
-    if meal_description.startswith("/"):
-        return ConversationHandler.END
+    # Добавляем воду
+    if user_id not in meals_data:
+        meals_data[user_id] = []
     
-    await update.message.reply_text("⏳ AI анализирует...")
+    # Считаем сколько воды уже выпито
+    water_today = sum(1 for meal in meals_data[user_id] 
+                     if meal.get('date') == today and meal.get('type') == 'water')
+    
+    meals_data[user_id].append({
+        'type': 'water',
+        'date': today,
+        'time': datetime.now().strftime("%H:%M")
+    })
+    save_data(meals_data, MEALS_FILE)
+    
+    water_ml = (water_today + 1) * 250
+    
+    await update.message.reply_text(
+        f"💧 Записано!\n\n"
+        f"Сегодня выпито: {water_ml} мл\n"
+        f"Рекомендация: 2000 мл/день\n"
+        f"{'✅ Отлично! Норма выполнена!' if water_ml >= 2000 else f'Осталось: {2000 - water_ml} мл'}",
+        reply_markup=get_keyboard()
+    )
+
+# === ЗАПИСЬ ВЕСА ===
+async def record_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запись веса"""
+    await update.message.reply_text(
+        "⚖️ Введи свой текущий вес (в кг):\n\n"
+        "Например: 65.5"
+    )
+    context.user_data['waiting_for'] = 'weight'
+
+# === СТАТИСТИКА ДНЯ ===
+async def show_daily_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ статистики за день"""
+    user_id = str(update.effective_user.id)
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    if user_id not in meals_data:
+        await update.message.reply_text("📊 Нет данных за сегодня")
+        return
+    
+    # Фильтруем приемы пищи за сегодня
+    today_meals = [m for m in meals_data[user_id] 
+                   if m.get('date') == today and m.get('type') != 'water']
+    
+    if not today_meals:
+        await update.message.reply_text(
+            "📊 Сегодня еще нет записей о питании\n\n"
+            "Записывай приемы пищи нажимая:\n"
+            "🌅 Завтрак / 🍽 Обед / 🌙 Ужин / 🍎 Перекус",
+            reply_markup=get_keyboard()
+        )
+        return
+    
+    # Подсчет КБЖУ
+    total_cal = sum(m.get('calories', 0) for m in today_meals)
+    total_prot = sum(m.get('protein', 0) for m in today_meals)
+    total_fats = sum(m.get('fats', 0) for m in today_meals)
+    total_carbs = sum(m.get('carbs', 0) for m in today_meals)
+    
+    # Получаем целевые показатели
+    targets = user_data.get(user_id, {})
+    target_cal = targets.get('target_calories', 2000)
+    target_prot = targets.get('target_protein', 100)
+    target_fats = targets.get('target_fats', 70)
+    target_carbs = targets.get('target_carbs', 250)
+    
+    # Подсчет воды
+    water_count = sum(1 for m in meals_data[user_id] 
+                     if m.get('date') == today and m.get('type') == 'water')
+    
+    # Формируем отчет
+    report = f"""
+📊 СТАТИСТИКА ДНЯ ({datetime.now().strftime('%d.%m.%Y')})
+
+🍽 Приемы пищи:
+"""
+    
+    for meal in today_meals:
+        meal_emoji = {
+            'breakfast': '🌅',
+            'lunch': '🍽',
+            'dinner': '🌙',
+            'snack': '🍎'
+        }.get(meal.get('type', ''), '🍴')
+        
+        report += f"{meal_emoji} {meal.get('time', '')} - {meal.get('description', '')[:30]}...\n"
+    
+    report += f"""
+📈 Потреблено / Цель:
+🔥 Калории: {total_cal:.0f} / {target_cal} ккал ({total_cal/target_cal*100:.0f}%)
+🥩 Белки: {total_prot:.0f} / {target_prot} г ({total_prot/target_prot*100:.0f}%)
+🥑 Жиры: {total_fats:.0f} / {target_fats} г ({total_fats/target_fats*100:.0f}%)
+🍞 Углеводы: {total_carbs:.0f} / {target_carbs} г ({total_carbs/target_carbs*100:.0f}%)
+
+💧 Вода: {water_count * 250} / 2000 мл
+
+"""
+    
+    # Анализ
+    if total_cal < target_cal * 0.8:
+        report += "⚠️ Мало калорий! Добавь перекус\n"
+    elif total_cal > target_cal * 1.1:
+        report += "⚠️ Перебор калорий!\n"
+    else:
+        report += "✅ Отлично! В пределах нормы\n"
+    
+    if total_prot < target_prot * 0.8:
+        report += "⚠️ Мало белка!\n"
+    
+    if water_count < 6:
+        report += "⚠️ Пей больше воды!\n"
+    
+    await update.message.reply_text(report, reply_markup=get_keyboard())
+
+# === ВОПРОСЫ ===
+async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вопрос к AI"""
+    user_id = str(update.effective_user.id)
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Проверяем лимит вопросов
+    user_info = user_data.get(user_id, {})
+    
+    if user_info.get('last_question_date') != today:
+        user_info['questions_today'] = 0
+        user_info['last_question_date'] = today
+    
+    if user_info['questions_today'] >= 10:
+        await update.message.reply_text(
+            "❌ Достигнут лимит 10 вопросов в день\n"
+            "Попробуй завтра!",
+            reply_markup=get_keyboard()
+        )
+        return
+    
+    await update.message.reply_text(
+        f"❓ Задай вопрос о питании и здоровье\n"
+        f"Осталось вопросов: {10 - user_info['questions_today']}/10\n\n"
+        f"Жду твой вопрос..."
+    )
+    context.user_data['waiting_for'] = 'question'
+
+# === ПОМОЩЬ ===
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Помощь"""
+    help_text = """
+ℹ️ КАК ПОЛЬЗОВАТЬСЯ БОТОМ:
+
+1️⃣ РАССЧИТАЙ КБЖУ
+Нажми "🧮 Рассчитать КБЖУ" и введи свои данные
+
+2️⃣ ЗАПИСЫВАЙ ПРИЕМЫ ПИЩИ
+• 🌅 Завтрак - записать завтрак
+• 🍽 Обед - записать обед
+• 🌙 Ужин - записать ужин
+• 🍎 Перекус - записать перекус
+
+Формат: продукт и вес
+Пример: Яблоко 200г, творог 150г
+
+3️⃣ ОТМЕЧАЙ ВОДУ
+💧 Нажимай каждый раз когда выпил стакан воды (250мл)
+
+4️⃣ СЛЕДИ ЗА ВЕСОМ
+⚖️ Записывай вес каждую пятницу
+
+5️⃣ СМОТРИ СТАТИСТИКУ
+📊 Проверяй статистику дня
+
+6️⃣ ЗАДАВАЙ ВОПРОСЫ
+❓ До 10 вопросов о питании в день
+
+⏰ НАПОМИНАНИЯ:
+• 8:00 - Завтрак
+• 13:00 - Обед  
+• 19:00 - Ужин
+• 10:00, 15:00, 18:00 - Вода
+• 21:00 - Итоги дня
+• Пятница - Взвешивание
+"""
+    await update.message.reply_text(help_text, reply_markup=get_keyboard())
+
+# === ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ===
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений"""
+    text = update.message.text
+    user_id = str(update.effective_user.id)
+    waiting_for = context.user_data.get('waiting_for')
+    
+    # Обработка ожидающих ввода
+    if waiting_for == 'kbzhu_data':
+        await process_kbzhu_data(update, context)
+    elif waiting_for == 'meal_description':
+        await process_meal_description(update, context)
+    elif waiting_for == 'weight':
+        await process_weight(update, context)
+    elif waiting_for == 'question':
+        await process_question(update, context)
+    else:
+        # Обработка кнопок
+        if text == "🧮 Рассчитать КБЖУ":
+            await calculate_kbzhu(update, context)
+        elif text in ["🌅 Завтрак", "🍽 Обед", "🌙 Ужин", "🍎 Перекус"]:
+            await record_meal(update, context)
+        elif text == "💧 Выпил воду":
+            await record_water(update, context)
+        elif text == "⚖️ Мой вес":
+            await record_weight(update, context)
+        elif text == "📊 Статистика дня":
+            await show_daily_stats(update, context)
+        elif text == "❓ Вопрос":
+            await ask_question(update, context)
+        elif text == "ℹ️ Помощь":
+            await show_help(update, context)
+        else:
+            await update.message.reply_text(
+                "Не понимаю команду. Используй кнопки меню 👇",
+                reply_markup=get_keyboard()
+            )
+
+# === ОБРАБОТКА ДАННЫХ КБЖУ ===
+async def process_kbzhu_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка данных для расчета КБЖУ"""
+    user_input = update.message.text
+    user_id = str(update.effective_user.id)
+    
+    await update.message.reply_text("⏳ Рассчитываю твою норму КБЖУ...")
     
     try:
         client = get_client()
@@ -162,329 +378,83 @@ async def process_meal_record(update: Update, context: ContextTypes.DEFAULT_TYPE
             raise ValueError("No API client")
         
         prompt = f"""
-        Проанализируй прием пищи: {meal_description}
+        Рассчитай точную норму КБЖУ для человека: {user_input}
         
-        Ответ СТРОГО в формате:
+        Используй формулу Миффлина-Сан Жеора.
+        
+        Ответ СТРОГО в формате (только числа):
         КАЛОРИИ: [число]
         БЕЛКИ: [число]
         ЖИРЫ: [число]
         УГЛЕВОДЫ: [число]
         
-        СОСТАВ:
-        • [продукт] - [грамм]
-        
-        АНАЛИЗ: [оценка]
+        Затем добавь:
+        РЕКОМЕНДАЦИИ:
+        [3 совета по питанию]
         """
         
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты нутрициолог. Точно рассчитываешь КБЖУ."},
+                {"role": "system", "content": "Ты профессиональный диетолог-нутрициолог."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=500,
-            temperature=0.3
-        )
-        
-        analysis = response.choices[0].message.content
-        
-        # Парсим числа
-        try:
-            calories = int(re.search(r'КАЛОРИИ:\s*(\d+)', analysis).group(1))
-            protein = float(re.search(r'БЕЛКИ:\s*([\d.]+)', analysis).group(1))
-            fats = float(re.search(r'ЖИРЫ:\s*([\d.]+)', analysis).group(1))
-            carbs = float(re.search(r'УГЛЕВОДЫ:\s*([\d.]+)', analysis).group(1))
-        except:
-            calories, protein, fats, carbs = 300, 20, 10, 40
-        
-        # Сохраняем
-        if user_id not in meals_data:
-            meals_data[user_id] = []
-        
-        meals_data[user_id].append({
-            'type': meal_type,
-            'description': meal_description,
-            'calories': calories,
-            'protein': protein,
-            'fats': fats,
-            'carbs': carbs,
-            'date': datetime.now().strftime("%Y-%m-%d"),
-            'time': datetime.now().strftime("%H:%M")
-        })
-        
-        # Статистика за день
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_meals = [m for m in meals_data[user_id] if m['date'] == today and m['type'] != 'water']
-        
-        total_cal = sum(m['calories'] for m in today_meals)
-        total_prot = sum(m['protein'] for m in today_meals)
-        total_fats = sum(m['fats'] for m in today_meals)
-        total_carbs = sum(m['carbs'] for m in today_meals)
-        
-        response_text = f"""
-✅ Записано!
-
-📊 Анализ:
-{analysis}
-
-📈 Сегодня:
-🔥 Калории: {total_cal:.0f} ккал
-🥩 Белки: {total_prot:.1f} г
-🥑 Жиры: {total_fats:.1f} г
-🍞 Углеводы: {total_carbs:.1f} г
-
-🍽 Приемов пищи: {len(today_meals)}
-"""
-        
-        await update.message.reply_text(response_text, reply_markup=get_main_keyboard())
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка", reply_markup=get_main_keyboard())
-    
-    return ConversationHandler.END
-
-# === СТАТИСТИКА ===
-async def show_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ статистики"""
-    keyboard = [
-        [InlineKeyboardButton("📅 Сегодня", callback_data="stats_today")],
-        [InlineKeyboardButton("📊 За неделю", callback_data="stats_week")],
-        [InlineKeyboardButton("📈 За месяц", callback_data="stats_month")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "📊 Выберите период:",
-        reply_markup=reply_markup
-    )
-
-async def show_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ статистики за период"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    period = query.data.replace("stats_", "")
-    
-    if user_id not in meals_data or not meals_data[user_id]:
-        await query.edit_message_text("📊 Нет данных")
-        return
-    
-    today = datetime.now().date()
-    
-    if period == "today":
-        target_date = today.strftime("%Y-%m-%d")
-        meals = [m for m in meals_data[user_id] if m['date'] == target_date and m['type'] != 'water']
-        water = sum(1 for m in meals_data[user_id] if m['date'] == target_date and m['type'] == 'water')
-        period_name = f"Сегодня"
-    elif period == "week":
-        week_ago = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        meals = [m for m in meals_data[user_id] if m['date'] >= week_ago and m['type'] != 'water']
-        period_name = "За неделю"
-        water = 0
-    else:
-        month_ago = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        meals = [m for m in meals_data[user_id] if m['date'] >= month_ago and m['type'] != 'water']
-        period_name = "За месяц"
-        water = 0
-    
-    if not meals:
-        await query.edit_message_text(f"📊 {period_name}: нет данных")
-        return
-    
-    total_cal = sum(m['calories'] for m in meals)
-    total_prot = sum(m['protein'] for m in meals)
-    total_fats = sum(m['fats'] for m in meals)
-    total_carbs = sum(m['carbs'] for m in meals)
-    
-    days_count = len(set(m['date'] for m in meals))
-    avg_cal = total_cal / days_count if days_count > 0 else 0
-    
-    response = f"""
-📊 {period_name}
-
-📅 Дней: {days_count}
-🍽 Приемов: {len(meals)}
-{'💧 Воды: ' + str(water * 250) + ' мл' if water > 0 else ''}
-
-📈 Всего:
-🔥 {total_cal:.0f} ккал
-🥩 {total_prot:.0f} г белка
-🥑 {total_fats:.0f} г жиров
-🍞 {total_carbs:.0f} г углеводов
-
-📊 В день:
-🔥 {avg_cal:.0f} ккал
-"""
-    
-    await query.edit_message_text(response)
-
-# === НАПОМИНАНИЯ ===
-async def setup_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Настройка напоминаний"""
-    keyboard = [
-        [InlineKeyboardButton("🌅 Завтрак 8:00", callback_data="remind_breakfast")],
-        [InlineKeyboardButton("🍽 Обед 13:00", callback_data="remind_lunch")],
-        [InlineKeyboardButton("🌙 Ужин 19:00", callback_data="remind_dinner")],
-        [InlineKeyboardButton("❌ Отключить все", callback_data="remind_off")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "⏰ Настройка напоминаний:",
-        reply_markup=reply_markup
-    )
-
-async def toggle_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Включение напоминания"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    action = query.data.replace("remind_", "")
-    
-    if action == "off":
-        current_jobs = context.job_queue.get_jobs_by_name(str(user_id))
-        for job in current_jobs:
-            job.schedule_removal()
-        await query.edit_message_text("✅ Напоминания отключены")
-    else:
-        if action == "breakfast":
-            context.job_queue.run_daily(
-                send_reminder,
-                time(hour=8, minute=0),
-                data={'user_id': user_id, 'type': 'breakfast'},
-                name=str(user_id)
-            )
-        elif action == "lunch":
-            context.job_queue.run_daily(
-                send_reminder,
-                time(hour=13, minute=0),
-                data={'user_id': user_id, 'type': 'lunch'},
-                name=str(user_id)
-            )
-        elif action == "dinner":
-            context.job_queue.run_daily(
-                send_reminder,
-                time(hour=19, minute=0),
-                data={'user_id': user_id, 'type': 'dinner'},
-                name=str(user_id)
-            )
-        
-        await query.edit_message_text(f"✅ Напоминание '{action}' включено!")
-
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Отправка напоминания"""
-    user_id = context.job.data['user_id']
-    reminder_type = context.job.data['type']
-    
-    messages = {
-        'breakfast': '🌅 Время завтрака!',
-        'lunch': '🍽 Время обеда!',
-        'dinner': '🌙 Время ужина!'
-    }
-    
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=messages.get(reminder_type, 'Напоминание!'),
-        reply_markup=get_main_keyboard()
-    )
-
-# === РАСЧЕТ КБЖУ ===
-async def calculate_kbzhu_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало расчета КБЖУ"""
-    await update.message.reply_text(
-        "🧮 Для расчета КБЖУ напишите через запятую:\n\n"
-        "• Пол (М/Ж)\n"
-        "• Возраст\n"
-        "• Вес (кг)\n"
-        "• Рост (см)\n"
-        "• Активность (низкая/средняя/высокая)\n"
-        "• Цель (похудеть/поддержать/набрать)\n\n"
-        "📝 Пример:\n"
-        "Ж, 25, 60, 170, средняя, похудеть"
-    )
-    return WAITING_KBZHU_DATA
-
-async def process_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Расчет КБЖУ"""
-    user_input = update.message.text
-    user_id = update.effective_user.id
-    
-    if user_input.startswith("/"):
-        return ConversationHandler.END
-    
-    await update.message.reply_text("⏳ Рассчитываю...")
-    
-    try:
-        client = get_client()
-        if not client:
-            raise ValueError("No API client")
-        
-        prompt = f"""
-        Рассчитай КБЖУ для: {user_input}
-        
-        Формула Миффлина-Сан Жеора.
-        
-        Ответ:
-        🎯 НОРМА:
-        🔥 Калории: [число] ккал
-        🥩 Белки: [число] г
-        🥑 Жиры: [число] г
-        🍞 Углеводы: [число] г
-        💧 Вода: [число] л
-        
-        💡 СОВЕТЫ:
-        [3 совета]
-        """
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Ты нутрициолог. Точно рассчитываешь КБЖУ."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1500,
+            max_tokens=800,
             temperature=0.3
         )
         
         result = response.choices[0].message.content
         
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        user_data[user_id]['kbzhu'] = result
-        
-        await update.message.reply_text(result, reply_markup=get_main_keyboard())
+        # Парсим числа
+        try:
+            calories = int(re.search(r'КАЛОРИИ:\s*(\d+)', result).group(1))
+            protein = int(re.search(r'БЕЛКИ:\s*(\d+)', result).group(1))
+            fats = int(re.search(r'ЖИРЫ:\s*(\d+)', result).group(1))
+            carbs = int(re.search(r'УГЛЕВОДЫ:\s*(\d+)', result).group(1))
+            
+            # Сохраняем
+            user_data[user_id]['target_calories'] = calories
+            user_data[user_id]['target_protein'] = protein
+            user_data[user_id]['target_fats'] = fats
+            user_data[user_id]['target_carbs'] = carbs
+            save_data(user_data, DATA_FILE)
+            
+            response_text = f"""
+✅ ТВОЯ НОРМА КБЖУ:
+
+🔥 Калории: {calories} ккал/день
+🥩 Белки: {protein} г/день
+🥑 Жиры: {fats} г/день
+🍞 Углеводы: {carbs} г/день
+💧 Вода: 2000 мл/день
+
+{result.split('РЕКОМЕНДАЦИИ:')[1] if 'РЕКОМЕНДАЦИИ:' in result else ''}
+
+📝 Теперь записывай все приемы пищи!
+"""
+            await update.message.reply_text(response_text, reply_markup=get_keyboard())
+            
+        except:
+            await update.message.reply_text(
+                "❌ Не удалось рассчитать. Попробуй еще раз в формате:\n"
+                "Женщина, 25 лет, 60 кг, 170 см, средняя активность, похудеть",
+                reply_markup=get_keyboard()
+            )
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка", reply_markup=get_main_keyboard())
+        await update.message.reply_text("❌ Ошибка расчета", reply_markup=get_keyboard())
     
-    return ConversationHandler.END
+    context.user_data['waiting_for'] = None
 
-# === СОСТАВЛЕНИЕ МЕНЮ ===
-async def menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало составления меню"""
-    await update.message.reply_text(
-        "🍱 Составлю меню!\n\n"
-        "Напишите:\n"
-        "• Сколько дней?\n"
-        "• Что любите?\n"
-        "• Что НЕ едите?\n\n"
-        "📝 Пример:\n"
-        "3 дня, люблю курицу, не ем свинину"
-    )
-    return WAITING_MENU_PREFERENCES
-
-async def process_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Составление меню"""
-    preferences = update.message.text
+# === ОБРАБОТКА ОПИСАНИЯ ЕДЫ ===
+async def process_meal_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка описания приема пищи"""
+    description = update.message.text
+    user_id = str(update.effective_user.id)
+    meal_type = context.user_data.get('current_meal', 'snack')
     
-    if preferences.startswith("/"):
-        return ConversationHandler.END
-    
-    await update.message.reply_text("⏳ Составляю...")
+    await update.message.reply_text("⏳ Анализирую состав и считаю КБЖУ...")
     
     try:
         client = get_client()
@@ -492,113 +462,146 @@ async def process_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise ValueError("No API client")
         
         prompt = f"""
-        Составь меню: {preferences}
+        Проанализируй прием пищи: {description}
         
-        📅 ДЕНЬ 1
-        🌅 ЗАВТРАК:
-        • [блюдо]
-        🍽 ОБЕД:
-        • [блюдо]
-        🌙 УЖИН:
-        • [блюдо]
+        Рассчитай точно на основе указанных граммовок.
         
-        [повтори для остальных дней]
+        Ответ СТРОГО в формате (только числа):
+        КАЛОРИИ: [число]
+        БЕЛКИ: [число]
+        ЖИРЫ: [число]
+        УГЛЕВОДЫ: [число]
         """
         
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты диетолог."},
+                {"role": "system", "content": "Ты нутрициолог. Точно считаешь КБЖУ продуктов по граммовкам."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=2500,
-            temperature=0.5
+            max_tokens=200,
+            temperature=0.2
         )
         
-        await update.message.reply_text(response.choices[0].message.content, reply_markup=get_main_keyboard())
+        result = response.choices[0].message.content
+        
+        # Парсим числа
+        try:
+            calories = int(re.search(r'КАЛОРИИ:\s*(\d+)', result).group(1))
+            protein = float(re.search(r'БЕЛКИ:\s*([\d.]+)', result).group(1))
+            fats = float(re.search(r'ЖИРЫ:\s*([\d.]+)', result).group(1))
+            carbs = float(re.search(r'УГЛЕВОДЫ:\s*([\d.]+)', result).group(1))
+        except:
+            calories, protein, fats, carbs = 300, 20, 10, 40
+        
+        # Сохраняем
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        if user_id not in meals_data:
+            meals_data[user_id] = []
+        
+        meal_entry = {
+            'type': meal_type,
+            'description': description,
+            'calories': calories,
+            'protein': protein,
+            'fats': fats,
+            'carbs': carbs,
+            'date': today,
+            'time': datetime.now().strftime("%H:%M")
+        }
+        
+        meals_data[user_id].append(meal_entry)
+        save_data(meals_data, MEALS_FILE)
+        
+        meal_emoji = {
+            'breakfast': '🌅 Завтрак',
+            'lunch': '🍽 Обед',
+            'dinner': '🌙 Ужин',
+            'snack': '🍎 Перекус'
+        }.get(meal_type, '🍴 Прием пищи')
+        
+        await update.message.reply_text(
+            f"✅ {meal_emoji} записан!\n\n"
+            f"📊 Пищевая ценность:\n"
+            f"🔥 Калории: {calories} ккал\n"
+            f"🥩 Белки: {protein:.1f} г\n"
+            f"🥑 Жиры: {fats:.1f} г\n"
+            f"🍞 Углеводы: {carbs:.1f} г\n\n"
+            f"Продолжай записывать приемы пищи!",
+            reply_markup=get_keyboard()
+        )
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка", reply_markup=get_main_keyboard())
+        await update.message.reply_text("❌ Ошибка анализа", reply_markup=get_keyboard())
     
-    return ConversationHandler.END
+    context.user_data['waiting_for'] = None
+    context.user_data['current_meal'] = None
 
-# === АНАЛИЗ ПИТАНИЯ ===
-async def analyze_food_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало анализа"""
-    await update.message.reply_text(
-        "🍽 Опишите блюдо:\n\n"
-        "Например:\n"
-        "• Борщ со сметаной\n"
-        "• Цезарь с курицей"
-    )
-    return WAITING_FOOD_INFO
-
-async def process_food_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Анализ еды"""
-    food = update.message.text
-    
-    if food.startswith("/"):
-        return ConversationHandler.END
-    
-    await update.message.reply_text("⏳ Анализирую...")
+# === ОБРАБОТКА ВЕСА ===
+async def process_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода веса"""
+    user_id = str(update.effective_user.id)
     
     try:
-        client = get_client()
-        if not client:
-            raise ValueError("No API client")
+        weight = float(update.message.text.replace(',', '.'))
         
-        prompt = f"""
-        Анализ: {food}
+        if weight < 30 or weight > 300:
+            await update.message.reply_text("❌ Некорректный вес. Введи реальный вес в кг")
+            return
         
-        📊 КБЖУ:
-        🔥 Калории: [число]
-        🥩 Белки: [г]
-        🥑 Жиры: [г]
-        🍞 Углеводы: [г]
+        # Сохраняем
+        if 'weight_history' not in user_data[user_id]:
+            user_data[user_id]['weight_history'] = []
         
-        ⚖️ Оценка: [из 10]
-        💡 Рекомендации: [когда есть]
-        """
+        user_data[user_id]['weight_history'].append({
+            'weight': weight,
+            'date': datetime.now().strftime("%Y-%m-%d")
+        })
+        save_data(user_data, DATA_FILE)
         
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Ты нутрициолог."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1000,
-            temperature=0.3
-        )
+        # Анализ изменения
+        history = user_data[user_id]['weight_history']
+        if len(history) > 1:
+            prev_weight = history[-2]['weight']
+            change = weight - prev_weight
+            
+            if change < 0:
+                emoji = "📉"
+                text = f"Снижение на {abs(change):.1f} кг"
+            elif change > 0:
+                emoji = "📈"
+                text = f"Увеличение на {change:.1f} кг"
+            else:
+                emoji = "➡️"
+                text = "Вес не изменился"
+            
+            await update.message.reply_text(
+                f"✅ Вес записан: {weight} кг\n\n"
+                f"{emoji} {text}\n\n"
+                f"Продолжай следить за питанием!",
+                reply_markup=get_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ Первая запись веса: {weight} кг\n\n"
+                f"Взвешивайся каждую пятницу!",
+                reply_markup=get_keyboard()
+            )
         
-        await update.message.reply_text(response.choices[0].message.content, reply_markup=get_main_keyboard())
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка", reply_markup=get_main_keyboard())
+    except ValueError:
+        await update.message.reply_text("❌ Введи число. Например: 65.5")
     
-    return ConversationHandler.END
+    context.user_data['waiting_for'] = None
 
-# === ВОПРОСЫ ===
-async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало вопроса"""
-    await update.message.reply_text(
-        "💬 Задайте вопрос о питании:"
-    )
-    return WAITING_AI_QUESTION
-
+# === ОБРАБОТКА ВОПРОСОВ ===
 async def process_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ответ на вопрос"""
+    """Обработка вопроса к AI"""
     question = update.message.text
+    user_id = str(update.effective_user.id)
     
-    if question in ["📝 Записать прием пищи", "📊 Моя статистика", "🧮 Рассчитать КБЖУ", 
-                    "🍱 Составить меню", "🍽 Анализ питания", "⏰ Напоминания", "💬 Задать вопрос"]:
-        return ConversationHandler.END
-    
-    if question.startswith("/"):
-        return ConversationHandler.END
-    
-    await update.message.reply_text("⏳ Думаю...")
+    await update.message.reply_text("⏳ AI готовит ответ...")
     
     try:
         client = get_client()
@@ -608,98 +611,50 @@ async def process_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты нутрициолог."},
+                {"role": "system", "content": "Ты опытный диетолог-нутрициолог. Отвечай кратко и по делу."},
                 {"role": "user", "content": question}
             ],
-            max_tokens=1500,
+            max_tokens=800,
             temperature=0.7
         )
         
+        # Увеличиваем счетчик
+        user_data[user_id]['questions_today'] += 1
+        save_data(user_data, DATA_FILE)
+        
+        questions_left = 10 - user_data[user_id]['questions_today']
+        
         await update.message.reply_text(
-            response.choices[0].message.content,
-            reply_markup=get_main_keyboard()
+            f"{response.choices[0].message.content}\n\n"
+            f"❓ Осталось вопросов: {questions_left}/10",
+            reply_markup=get_keyboard()
         )
-        return WAITING_AI_QUESTION
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка", reply_markup=get_main_keyboard())
-        return ConversationHandler.END
+        await update.message.reply_text("❌ Ошибка ответа", reply_markup=get_keyboard())
+    
+    context.user_data['waiting_for'] = None
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена"""
-    await update.message.reply_text("❌ Отменено", reply_markup=get_main_keyboard())
-    return ConversationHandler.END
-
-# === ГЛАВНАЯ ФУНКЦИЯ ===
-def main():
-    """Запуск бота"""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("No token!")
-        return
+# === НАПОМИНАНИЯ ===
+def setup_daily_reminders(context, user_id):
+    """Установка ежедневных напоминаний"""
+    job_queue = context.job_queue
     
-    app = Application.builder().token(token).build()
+    # Удаляем старые задания
+    current_jobs = job_queue.get_jobs_by_name(str(user_id))
+    for job in current_jobs:
+        job.schedule_removal()
     
-    # Команды
-    app.add_handler(CommandHandler("start", start))
-    
-    # Обработчики inline кнопок
-    app.add_handler(CallbackQueryHandler(meal_type_selected, pattern="^meal_"))
-    app.add_handler(CallbackQueryHandler(show_stats_period, pattern="^stats_"))
-    app.add_handler(CallbackQueryHandler(toggle_reminder, pattern="^remind_"))
-    
-    # Обработчики кнопок клавиатуры
-    app.add_handler(MessageHandler(filters.Regex("^📝 Записать прием пищи$"), record_meal_start))
-    app.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), show_statistics))
-    app.add_handler(MessageHandler(filters.Regex("^⏰ Напоминания$"), setup_reminders))
-    
-    # Обработчики с состояниями
-    meal_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(meal_type_selected, pattern="^meal_")],
-        states={
-            WAITING_MEAL_RECORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_meal_record)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
+    # Напоминания о приемах пищи
+    job_queue.run_daily(
+        reminder_breakfast,
+        time(hour=8, minute=0),
+        data=user_id,
+        name=str(user_id)
     )
     
-    kbzhu_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🧮 Рассчитать КБЖУ$"), calculate_kbzhu_start)],
-        states={
-            WAITING_KBZHU_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_kbzhu)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
-    menu_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🍱 Составить меню$"), menu_start)],
-        states={
-            WAITING_MENU_PREFERENCES: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_menu)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
-    food_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🍽 Анализ питания$"), analyze_food_start)],
-        states={
-            WAITING_FOOD_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_food_analysis)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
-    question_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^💬 Задать вопрос$"), ask_question_start)],
-        states={
-            WAITING_AI_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_question)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
-    app.add_handler(meal_conv)
-    app.add_handler(kbzhu_conv)
-    app.add_handler(menu_conv)
-    app.add_handler(food_conv)
-    app.add_handler(question_conv)
-    
-    logger.info("Bot started!")
-    
+    job_queue.run_daily(
+        reminder_lunch,
+        time(hour=13, minute=0),
+        data=user_id,
