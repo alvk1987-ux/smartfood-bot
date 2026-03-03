@@ -2,68 +2,113 @@ import os
 import logging
 import json
 import re
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, JobQueue
 from telegram.constants import ChatMemberStatus
 from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# НАСТРОЙКИ ПЛАТНОГО КАНАЛА
-PREMIUM_CHANNEL_ID = "@smartfood_premium"  # ID вашего платного канала
-CHANNEL_LINK = "https://t.me/tribute/app?startapp=sHVK"  # Ссылка на оплату
+# ===== НАСТРОЙКИ ПЛАТНОГО КАНАЛА =====
+PREMIUM_CHANNEL_ID = "@your_premium_channel"  # ВАШ ПЛАТНЫЙ КАНАЛ (замените!)
+CHANNEL_PAYMENT_LINK = "https://paywall.pw/your_link"  # ВАША ССЫЛКА PAYWALL (замените!)
 PRICE = 399  # Цена подписки
+TRIAL_DAYS = 2  # Дней бесплатно
 
-# Хранилище данных
-user_data = {}
-meals_data = {}
+# ===== ХРАНИЛИЩЕ ДАННЫХ =====
+USERS_FILE = "users.json"
+MEALS_FILE = "meals.json"
+
+def load_json(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_json(data, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# Загружаем данные
+users_db = load_json(USERS_FILE)
+meals_db = load_json(MEALS_FILE)
 
 def get_client():
-    """Клиент OpenAI через ProxyAPI"""
+    """OpenAI клиент"""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
-    
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.proxyapi.ru/openai/v1"
-    )
-    return client
+    return OpenAI(api_key=api_key, base_url="https://api.proxyapi.ru/openai/v1")
 
-async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def check_channel_subscription(context, user_id):
     """Проверка подписки на платный канал"""
-    user_id = update.effective_user.id
-    
     try:
         member = await context.bot.get_chat_member(
             chat_id=PREMIUM_CHANNEL_ID,
             user_id=user_id
         )
-        
-        if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-            return True
-        else:
-            return False
-    except:
+        return member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    except Exception as e:
+        logger.error(f"Check subscription error: {e}")
         return False
 
-def get_keyboard(is_premium=True):
-    """Главная клавиатура"""
-    if not is_premium:
-        keyboard = [
-            [KeyboardButton("💳 Купить доступ 399₽")],
-            [KeyboardButton("🎁 У меня есть подписка")],
-            [KeyboardButton("ℹ️ Что умеет бот?")]
-        ]
-    else:
+def get_user_status(user_id, context=None):
+    """
+    Получение статуса пользователя
+    Returns: ('trial', days_left) | ('premium', None) | ('expired', None)
+    """
+    user_id = str(user_id)
+    
+    # Новый пользователь
+    if user_id not in users_db:
+        return ('new', TRIAL_DAYS)
+    
+    user = users_db[user_id]
+    now = datetime.now()
+    
+    # Проверяем пробный период
+    if 'trial_start' in user:
+        trial_start = datetime.fromisoformat(user['trial_start'])
+        trial_end = trial_start + timedelta(days=TRIAL_DAYS)
+        
+        if now <= trial_end:
+            # Еще в пробном периоде
+            time_left = trial_end - now
+            days = time_left.days
+            hours = time_left.seconds // 3600
+            
+            if days > 0:
+                return ('trial', f"{days}д {hours}ч")
+            else:
+                return ('trial', f"{hours} часов")
+    
+    # Проверяем подписку на канал (будет проверяться при каждом действии)
+    if user.get('has_premium', False):
+        return ('premium', None)
+    
+    return ('expired', None)
+
+def get_keyboard(status):
+    """Клавиатура в зависимости от статуса"""
+    if status in ['trial', 'premium']:
+        # Полный доступ
         keyboard = [
             [KeyboardButton("🧮 КБЖУ"), KeyboardButton("⚖️ Мой вес")],
             [KeyboardButton("🌅 Завтрак"), KeyboardButton("🍎 Перекус")],
             [KeyboardButton("🍽 Обед"), KeyboardButton("🌙 Ужин")],
             [KeyboardButton("💧 Вода"), KeyboardButton("📊 Статистика")],
-            [KeyboardButton("❓ Вопрос о еде")]
+            [KeyboardButton("❓ Вопрос о еде"), KeyboardButton("💳 Подписка")]
+        ]
+    else:
+        # Ограниченный доступ
+        keyboard = [
+            [KeyboardButton("💳 Купить доступ 399₽")],
+            [KeyboardButton("✅ Я оплатил подписку")],
+            [KeyboardButton("ℹ️ Что умеет бот?")],
+            [KeyboardButton("🎁 Активировать промокод")]
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -72,87 +117,167 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     
-    # Инициализация пользователя
-    if user_id not in user_data:
-        user_data[user_id] = {
+    # Проверяем подписку на канал
+    has_premium = await check_channel_subscription(context, user.id)
+    
+    # Новый пользователь
+    if user_id not in users_db:
+        users_db[user_id] = {
             "name": user.first_name,
+            "trial_start": datetime.now().isoformat(),
             "joined": datetime.now().isoformat(),
+            "has_premium": has_premium,
             "target_calories": 2000,
             "target_protein": 100,
             "target_fats": 70,
             "target_carbs": 250,
-            "questions_today": 0,
-            "last_question_date": None
+            "questions_today": 0
         }
-    
-    if user_id not in meals_data:
-        meals_data[user_id] = []
-    
-    # Проверяем подписку
-    is_premium = await check_subscription(update, context)
-    
-    if is_premium:
+        save_json(users_db, USERS_FILE)
+        
+        if user_id not in meals_db:
+            meals_db[user_id] = []
+            save_json(meals_db, MEALS_FILE)
+        
+        # Планируем напоминания о конце триала
+        await schedule_trial_reminders(context, int(user_id))
+        
+        # Приветствие для нового пользователя
         await update.message.reply_text(
             f"👋 Привет, {user.first_name}!\n\n"
-            f"✅ Доступ активен!\n\n"
-            f"🤖 Я SmartFood AI - твой дневник питания!\n\n"
+            f"🎁 **ПОДАРОК: 2 ДНЯ БЕСПЛАТНО!**\n"
+            f"Все функции разблокированы на 48 часов!\n\n"
+            f"🤖 Я SmartFood AI - твой умный дневник питания!\n\n"
+            f"✨ Что умею:\n"
+            f"• AI подсчет калорий любых блюд\n"
+            f"• Персональный расчет КБЖУ\n"
+            f"• Дневник питания с анализом\n"
+            f"• Контроль воды и веса\n"
+            f"• Ответы на вопросы о питании\n\n"
             f"📝 Просто пиши что съел - AI всё посчитает!\n\n"
-            f"Начни с кнопки 🧮 КБЖУ",
-            reply_markup=get_keyboard(True)
+            f"⏰ Пробный период: 2 дня\n"
+            f"💰 Далее: 399₽/месяц\n\n"
+            f"Начни с расчета КБЖУ! 👇",
+            reply_markup=get_keyboard('trial'),
+            parse_mode='Markdown'
         )
     else:
-        await update.message.reply_text(
-            f"👋 Привет, {user.first_name}!\n\n"
-            f"🤖 Я SmartFood AI - умный дневник питания!\n\n"
-            f"✨ ПРОСТО ПИШИ ЧТО СЪЕЛ:\n"
-            f'Напишешь: "Борщ со сметаной"\n'
-            f"Получишь: 320 ккал, Б:15г, Ж:12г, У:38г\n\n"
-            f"💰 Стоимость: 399₽/месяц (13₽/день)\n\n"
-            f"👇 Нажми для покупки:",
-            reply_markup=get_keyboard(False)
-        )
+        # Существующий пользователь
+        users_db[user_id]['has_premium'] = has_premium
+        save_json(users_db, USERS_FILE)
+        
+        status, time_left = get_user_status(user_id)
+        
+        if has_premium:
+            await update.message.reply_text(
+                f"👋 С возвращением, {user.first_name}!\n\n"
+                f"✅ Подписка на канал активна!\n"
+                f"Все функции разблокированы!\n\n"
+                f"Выбери действие 👇",
+                reply_markup=get_keyboard('premium')
+            )
+        elif status == 'trial':
+            await update.message.reply_text(
+                f"👋 С возвращением, {user.first_name}!\n\n"
+                f"🎁 Пробный период активен!\n"
+                f"⏰ Осталось: {time_left}\n\n"
+                f"Выбери действие 👇",
+                reply_markup=get_keyboard('trial')
+            )
+        else:
+            await update.message.reply_text(
+                f"👋 С возвращением, {user.first_name}!\n\n"
+                f"❌ Пробный период завершен!\n\n"
+                f"Для продолжения нужна подписка:\n"
+                f"💰 399₽/месяц - это всего 13₽/день!\n\n"
+                f"Нажми для оплаты 👇",
+                reply_markup=get_keyboard('expired')
+            )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка всех текстовых сообщений"""
+    """Обработка всех сообщений"""
     if not update.message or not update.message.text:
         return
-        
+    
     text = update.message.text
     user_id = update.effective_user.id
+    user_id_str = str(user_id)
     
-    # Проверка ожидающих вводов
+    # Проверяем ожидающие вводы
     waiting_for = context.user_data.get('waiting_for')
     
-    if waiting_for == 'kbzhu_data':
-        await process_kbzhu_data(update, context)
-        return
-    elif waiting_for == 'meal_description':
-        await process_meal_description(update, context)
-        return
-    elif waiting_for == 'weight':
-        await process_weight(update, context)
-        return
-    elif waiting_for == 'question':
-        await process_question(update, context)
+    if waiting_for:
+        if waiting_for == 'kbzhu_data':
+            await process_kbzhu_data(update, context)
+        elif waiting_for == 'meal_description':
+            await process_meal_description(update, context)
+        elif waiting_for == 'weight':
+            await process_weight(update, context)
+        elif waiting_for == 'question':
+            await process_question(update, context)
         return
     
-    # Кнопки для неподписанных
+    # === КНОПКИ БЕЗ ПОДПИСКИ ===
+    
     if text == "💳 Купить доступ 399₽":
-        await show_payment_info(update, context)
+        keyboard = [
+            [InlineKeyboardButton("💳 Оплатить на Paywall", url=CHANNEL_PAYMENT_LINK)],
+            [InlineKeyboardButton("✅ Я оплатил", callback_data="check_payment")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        status, time_left = get_user_status(user_id)
+        
+        if status == 'trial':
+            trial_text = f"⏰ У вас еще есть {time_left} бесплатного доступа!\n\n"
+        else:
+            trial_text = ""
+        
+        await update.message.reply_text(
+            f"💳 **ОФОРМЛЕНИЕ ПОДПИСКИ**\n\n"
+            f"{trial_text}"
+            f"💰 Стоимость: 399₽/месяц\n"
+            f"Это всего 13₽ в день!\n\n"
+            f"✅ Что входит:\n"
+            f"• Доступ к платному каналу с контентом\n"
+            f"• AI-бот для подсчета калорий\n"
+            f"• Дневник питания\n"
+            f"• Персональные рекомендации\n"
+            f"• Поддержка 24/7\n\n"
+            f"📝 Как оплатить:\n"
+            f"1. Нажмите 'Оплатить на Paywall'\n"
+            f"2. Оплатите подписку картой\n"
+            f"3. Вернитесь и нажмите 'Я оплатил'\n\n"
+            f"После оплаты вы получите:\n"
+            f"• Доступ к каналу {PREMIUM_CHANNEL_ID}\n"
+            f"• Полный функционал бота",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
         return
     
-    elif text == "🎁 У меня есть подписка":
-        is_premium = await check_subscription(update, context)
-        if is_premium:
+    elif text == "✅ Я оплатил подписку":
+        # Проверяем подписку
+        has_premium = await check_channel_subscription(context, user_id)
+        
+        if has_premium:
+            users_db[user_id_str]['has_premium'] = True
+            save_json(users_db, USERS_FILE)
+            
             await update.message.reply_text(
-                "✅ Отлично! Подписка активна!",
-                reply_markup=get_keyboard(True)
+                "✅ Отлично! Подписка подтверждена!\n\n"
+                "🎉 Добро пожаловать в Premium!\n"
+                "Все функции разблокированы!",
+                reply_markup=get_keyboard('premium')
             )
         else:
             await update.message.reply_text(
                 "❌ Подписка не найдена!\n\n"
-                "Сначала оплатите доступ.",
-                reply_markup=get_keyboard(False)
+                "Убедитесь, что:\n"
+                "1. Оплата прошла успешно\n"
+                f"2. Вы вступили в канал {PREMIUM_CHANNEL_ID}\n\n"
+                "Если оплатили только что, подождите 1 минуту и попробуйте снова.",
+                reply_markup=get_keyboard('expired')
             )
         return
     
@@ -160,14 +285,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_features(update, context)
         return
     
-    # Проверка подписки для основных функций
-    is_premium = await check_subscription(update, context)
-    
-    if not is_premium:
+    elif text == "🎁 Активировать промокод":
         await update.message.reply_text(
-            "❌ Нужна подписка!\n\n"
-            "💰 Стоимость: 399₽/месяц",
-            reply_markup=get_keyboard(False)
+            "🎁 Введите промокод:\n\n"
+            "Промокоды можно получить:\n"
+            "• В нашем канале\n"
+            "• У блогеров-партнеров\n"
+            "• На специальных акциях"
+        )
+        return
+    
+    elif text == "💳 Подписка":
+        # Показываем статус подписки
+        status, time_left = get_user_status(user_id)
+        has_premium = await check_channel_subscription(context, user_id)
+        
+        if has_premium:
+            status_text = "✅ Подписка активна!\nДоступ к каналу подтвержден."
+        elif status == 'trial':
+            status_text = f"🎁 Пробный период\n⏰ Осталось: {time_left}"
+        else:
+            status_text = "❌ Нет активной подписки"
+        
+        keyboard = [
+            [InlineKeyboardButton("💳 Продлить подписку", url=CHANNEL_PAYMENT_LINK)],
+            [InlineKeyboardButton("📊 История платежей", callback_data="payment_history")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"💳 **СТАТУС ПОДПИСКИ**\n\n"
+            f"{status_text}\n\n"
+            f"Тариф: 399₽/месяц\n"
+            f"Канал: {PREMIUM_CHANNEL_ID}",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # === ПРОВЕРКА ДОСТУПА К ФУНКЦИЯМ ===
+    
+    # Проверяем статус для основных функций
+    status, time_left = get_user_status(user_id)
+    has_premium = await check_channel_subscription(context, user_id)
+    
+    # Обновляем статус премиума
+    if has_premium:
+        users_db[user_id_str]['has_premium'] = True
+        save_json(users_db, USERS_FILE)
+        status = 'premium'
+    
+    if status not in ['trial', 'premium']:
+        await update.message.reply_text(
+            "❌ Пробный период завершен!\n\n"
+            "Для доступа к функциям нужна подписка.\n"
+            "💰 Всего 399₽/месяц\n\n"
+            "Нажмите 'Купить доступ' 👇",
+            reply_markup=get_keyboard('expired')
         )
         return
     
@@ -217,96 +391,81 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "Используй кнопки меню 👇",
-            reply_markup=get_keyboard(is_premium)
+            reply_markup=get_keyboard(status)
         )
 
-async def show_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Информация об оплате"""
+# === НАПОМИНАНИЯ О КОНЦЕ ТРИАЛА ===
+
+async def schedule_trial_reminders(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Планирование напоминаний о конце пробного периода"""
+    job_queue = context.job_queue
+    
+    # Напоминание за 6 часов до конца
+    job_queue.run_once(
+        trial_ending_soon,
+        when=timedelta(days=TRIAL_DAYS, hours=-6),
+        data=user_id,
+        name=f"trial_6h_{user_id}"
+    )
+    
+    # Напоминание когда закончится
+    job_queue.run_once(
+        trial_ended,
+        when=timedelta(days=TRIAL_DAYS),
+        data=user_id,
+        name=f"trial_end_{user_id}"
+    )
+
+async def trial_ending_soon(context: ContextTypes.DEFAULT_TYPE):
+    """Напоминание за 6 часов до конца триала"""
+    user_id = context.job.data
+    
     keyboard = [
-        [InlineKeyboardButton("💳 Оплатить 399₽", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ Я оплатил", callback_data="check_payment")]
+        [InlineKeyboardButton("💳 Оформить подписку", url=CHANNEL_PAYMENT_LINK)]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        f"""
-💳 ОФОРМЛЕНИЕ ПОДПИСКИ
-
-💰 Стоимость: 399₽/месяц
-
-✅ ЧТО ВХОДИТ:
-• AI-анализ любых блюд
-• Автоматический подсчет КБЖУ
-• Дневник питания
-• Статистика и графики
-• 10 вопросов AI в день
-
-📱 КАК ОПЛАТИТЬ:
-1. Нажмите "Оплатить"
-2. Оплатите через Telegram
-3. Нажмите "Я оплатил"
-""",
-        reply_markup=reply_markup
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="⏰ **ПРОБНЫЙ ПЕРИОД ЗАКАНЧИВАЕТСЯ!**\n\n"
+             "Осталось всего 6 часов!\n\n"
+             "Оформите подписку сейчас и получите:\n"
+             "✅ Полный доступ к боту\n"
+             "✅ Эксклюзивный контент в канале\n"
+             "✅ Персональные рекомендации\n\n"
+             "💰 Всего 399₽/месяц",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
-async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка оплаты"""
-    query = update.callback_query
-    await query.answer()
+async def trial_ended(context: ContextTypes.DEFAULT_TYPE):
+    """Уведомление об окончании триала"""
+    user_id = context.job.data
     
-    is_premium = await check_subscription(update, context)
+    keyboard = [
+        [InlineKeyboardButton("💳 Купить доступ", url=CHANNEL_PAYMENT_LINK)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if is_premium:
-        await query.edit_message_text(
-            "✅ Оплата подтверждена!\n\n"
-            "Все функции разблокированы!"
-        )
-        await query.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_keyboard(True)
-        )
-    else:
-        await query.edit_message_text(
-            "❌ Подписка не найдена!\n\n"
-            "Попробуйте еще раз"
-        )
-
-async def show_features(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Возможности бота"""
-    await update.message.reply_text(
-        """
-🤖 ЧТО УМЕЕТ БОТ:
-
-🎯 ГЛАВНОЕ:
-Пишешь что съел → получаешь КБЖУ!
-
-📝 ДНЕВНИК:
-• Записывает приемы пищи
-• Считает калории
-• Показывает статистику
-
-🧮 РАСЧЕТЫ:
-• Персональная норма КБЖУ
-• Анализ любых блюд
-
-⏰ НАПОМИНАНИЯ:
-• О приемах пищи
-• О воде
-
-🤖 AI-КОНСУЛЬТАНТ:
-• 10 вопросов в день
-
-💰 ВСЕГО 399₽/МЕСЯЦ!
-""",
-        reply_markup=get_keyboard(False)
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="❌ **ПРОБНЫЙ ПЕРИОД ЗАВЕРШЕН!**\n\n"
+             "Спасибо, что попробовали SmartFood AI!\n\n"
+             "Для продолжения использования нужна подписка:\n"
+             "💰 399₽/месяц (это всего 13₽ в день!)\n\n"
+             "Нажмите кнопку ниже для оплаты 👇",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
+
+# === ФУНКЦИИ ОБРАБОТКИ ===
 
 async def process_kbzhu_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Расчет КБЖУ"""
     user_input = update.message.text
     user_id = str(update.effective_user.id)
     
-    await update.message.reply_text("⏳ Рассчитываю...")
+    await update.message.reply_text("⏳ AI рассчитывает...")
     
     try:
         client = get_client()
@@ -320,6 +479,8 @@ async def process_kbzhu_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
             prompt = f"""
             Рассчитай норму КБЖУ для: {user_input}
             
+            Используй формулу Миффлина-Сан Жеора.
+            
             Ответ ТОЛЬКО числа:
             КАЛОРИИ: [число]
             БЕЛКИ: [число]
@@ -330,7 +491,7 @@ async def process_kbzhu_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Рассчитай КБЖУ."},
+                    {"role": "system", "content": "Ты диетолог. Рассчитай КБЖУ точно."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
@@ -350,24 +511,28 @@ async def process_kbzhu_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 fats = 70
                 carbs = 250
         
-        user_data[user_id]['target_calories'] = calories
-        user_data[user_id]['target_protein'] = protein
-        user_data[user_id]['target_fats'] = fats
-        user_data[user_id]['target_carbs'] = carbs
+        users_db[user_id]['target_calories'] = calories
+        users_db[user_id]['target_protein'] = protein
+        users_db[user_id]['target_fats'] = fats
+        users_db[user_id]['target_carbs'] = carbs
+        save_json(users_db, USERS_FILE)
+        
+        status, _ = get_user_status(update.effective_user.id)
         
         await update.message.reply_text(
-            f"✅ ТВОЯ НОРМА:\n\n"
+            f"✅ **ТВОЯ НОРМА:**\n\n"
             f"🔥 Калории: {calories} ккал\n"
             f"🥩 Белки: {protein} г\n"
             f"🥑 Жиры: {fats} г\n"
             f"🍞 Углеводы: {carbs} г\n"
             f"💧 Вода: 2000 мл\n\n"
-            f"Записывай приемы пищи!",
-            reply_markup=get_keyboard(True)
+            f"Теперь записывай приемы пищи!",
+            reply_markup=get_keyboard(status),
+            parse_mode='Markdown'
         )
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка")
+        await update.message.reply_text("❌ Ошибка расчета")
     
     context.user_data['waiting_for'] = None
 
@@ -377,7 +542,7 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
     user_id = str(update.effective_user.id)
     meal_type = context.user_data.get('current_meal', 'snack')
     
-    await update.message.reply_text("⏳ Анализирую...")
+    await update.message.reply_text("⏳ AI анализирует...")
     
     try:
         client = get_client()
@@ -388,7 +553,7 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
             carbs = 40
         else:
             prompt = f"""
-            Проанализируй: {description}
+            Проанализируй еду: {description}
             
             Ответ ТОЛЬКО числа:
             КАЛОРИИ: [число]
@@ -400,7 +565,7 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Рассчитай КБЖУ еды."},
+                    {"role": "system", "content": "Рассчитай КБЖУ точно."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=150,
@@ -422,10 +587,10 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
         
         # Сохраняем
         today = datetime.now().strftime("%Y-%m-%d")
-        if user_id not in meals_data:
-            meals_data[user_id] = []
+        if user_id not in meals_db:
+            meals_db[user_id] = []
         
-        meals_data[user_id].append({
+        meals_db[user_id].append({
             'type': meal_type,
             'description': description,
             'calories': calories,
@@ -435,6 +600,7 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
             'date': today,
             'time': datetime.now().strftime("%H:%M")
         })
+        save_json(meals_db, MEALS_FILE)
         
         meal_emoji = {
             'breakfast': '🌅',
@@ -443,20 +609,23 @@ async def process_meal_description(update: Update, context: ContextTypes.DEFAULT
             'dinner': '🌙'
         }.get(meal_type, '🍴')
         
+        status, _ = get_user_status(update.effective_user.id)
+        
         await update.message.reply_text(
             f"✅ Записано!\n\n"
             f"{meal_emoji} {description}\n\n"
-            f"📊 КБЖУ:\n"
+            f"📊 **КБЖУ:**\n"
             f"🔥 {calories} ккал\n"
             f"🥩 {protein:.1f} г белка\n"
             f"🥑 {fats:.1f} г жиров\n"
             f"🍞 {carbs:.1f} г углеводов",
-            reply_markup=get_keyboard(True)
+            reply_markup=get_keyboard(status),
+            parse_mode='Markdown'
         )
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Ошибка")
+        await update.message.reply_text("❌ Ошибка анализа")
     
     context.user_data['waiting_for'] = None
 
@@ -465,151 +634,23 @@ async def record_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     today = datetime.now().strftime("%Y-%m-%d")
     
-    if user_id not in meals_data:
-        meals_data[user_id] = []
+    if user_id not in meals_db:
+        meals_db[user_id] = []
     
-    water_today = sum(1 for m in meals_data[user_id] 
+    water_today = sum(1 for m in meals_db[user_id] 
                      if m.get('date') == today and m.get('type') == 'water')
     
-    meals_data[user_id].append({
+    meals_db[user_id].append({
         'type': 'water',
         'date': today,
         'time': datetime.now().strftime("%H:%M")
     })
+    save_json(meals_db, MEALS_FILE)
     
     water_ml = (water_today + 1) * 250
     
+    status, _ = get_user_status(update.effective_user.id)
+    
     await update.message.reply_text(
         f"💧 +250 мл\n\n"
-        f"Сегодня: {water_ml} / 2000 мл\n"
-        f"{'✅ Норма!' if water_ml >= 2000 else f'Осталось: {2000 - water_ml} мл'}",
-        reply_markup=get_keyboard(True)
-    )
-
-async def process_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение веса"""
-    try:
-        weight = float(update.message.text.replace(',', '.'))
-        
-        if weight < 30 or weight > 300:
-            await update.message.reply_text("❌ Некорректный вес")
-            return
-            
-        await update.message.reply_text(
-            f"✅ Вес {weight} кг записан!",
-            reply_markup=get_keyboard(True)
-        )
-    except:
-        await update.message.reply_text("❌ Введи число")
-    
-    context.user_data['waiting_for'] = None
-
-async def show_daily_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика дня"""
-    user_id = str(update.effective_user.id)
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    if user_id not in meals_data:
-        await update.message.reply_text("📊 Нет данных")
-        return
-    
-    today_meals = [m for m in meals_data[user_id] 
-                   if m.get('date') == today and m.get('type') != 'water']
-    
-    if not today_meals:
-        await update.message.reply_text("📊 Сегодня нет записей")
-        return
-    
-    total_cal = sum(m.get('calories', 0) for m in today_meals)
-    total_prot = sum(m.get('protein', 0) for m in today_meals)
-    total_fats = sum(m.get('fats', 0) for m in today_meals)
-    total_carbs = sum(m.get('carbs', 0) for m in today_meals)
-    
-    target_cal = user_data[user_id].get('target_calories', 2000)
-    
-    water_count = sum(1 for m in meals_data[user_id] 
-                     if m.get('date') == today and m.get('type') == 'water')
-    
-    await update.message.reply_text(
-        f"📊 СТАТИСТИКА ДНЯ\n\n"
-        f"🔥 Калории: {total_cal:.0f}/{target_cal} ({total_cal/target_cal*100:.0f}%)\n"
-        f"🥩 Белки: {total_prot:.0f} г\n"
-        f"🥑 Жиры: {total_fats:.0f} г\n"
-        f"🍞 Углеводы: {total_carbs:.0f} г\n"
-        f"💧 Вода: {water_count * 250}/2000 мл\n\n"
-        f"🍽 Приемов: {len(today_meals)}",
-        reply_markup=get_keyboard(True)
-    )
-
-async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вопрос о еде"""
-    user_id = str(update.effective_user.id)
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Проверяем лимит
-    if user_data[user_id].get('last_question_date') != today:
-        user_data[user_id]['questions_today'] = 0
-        user_data[user_id]['last_question_date'] = today
-    
-    if user_data[user_id]['questions_today'] >= 10:
-        await update.message.reply_text("❌ Лимит 10 вопросов")
-        return
-    
-    await update.message.reply_text(
-        f"❓ Задай вопрос о питании\n"
-        f"Осталось: {10 - user_data[user_id]['questions_today']}/10"
-    )
-    context.user_data['waiting_for'] = 'question'
-
-async def process_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ответ на вопрос"""
-    question = update.message.text
-    user_id = str(update.effective_user.id)
-    
-    await update.message.reply_text("⏳ Думаю...")
-    
-    try:
-        client = get_client()
-        if client:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Ты диетолог. Отвечай кратко."},
-                    {"role": "user", "content": question}
-                ],
-                max_tokens=500
-            )
-            
-            user_data[user_id]['questions_today'] += 1
-            
-            await update.message.reply_text(
-                response.choices[0].message.content,
-                reply_markup=get_keyboard(True)
-            )
-        else:
-            await update.message.reply_text("❌ AI недоступен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-    
-    context.user_data['waiting_for'] = None
-
-def main():
-    """Запуск бота"""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("No token!")
-        return
-    
-    logger.info("Starting bot...")
-    app = Application.builder().token(token).build()
-    
-    # Обработчики
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(check_payment_callback, pattern="check_payment"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    logger.info("Bot started!")
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+        f"Сегодня: {water_ml} / 2000 мл\
