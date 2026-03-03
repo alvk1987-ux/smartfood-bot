@@ -1,6 +1,5 @@
 import os
 import logging
-import random
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from openai import OpenAI
@@ -8,11 +7,13 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Состояния для ConversationHandler
-(WAITING_GENDER, WAITING_AGE, WAITING_WEIGHT, WAITING_HEIGHT, 
- WAITING_ACTIVITY, WAITING_GOAL, WAITING_QUESTION, WAITING_PHOTO) = range(8)
+# Состояния диалога
+WAITING_FOOD_INFO = 1
+WAITING_KBZHU_DATA = 2
+WAITING_MENU_PREFERENCES = 3
+WAITING_AI_RESPONSE = 4
 
-# Хранилище данных пользователей (в реальном проекте используйте БД)
+# Хранилище данных пользователей
 user_data = {}
 
 def get_client():
@@ -31,10 +32,9 @@ def get_main_keyboard():
     """Главная клавиатура"""
     keyboard = [
         [KeyboardButton("🧮 Рассчитать КБЖУ")],
-        [KeyboardButton("🍱 Меню на день")],
-        [KeyboardButton("📸 Анализ по фото")],
-        [KeyboardButton("💬 Задать вопрос")],
-        [KeyboardButton("📊 Мой профиль")]
+        [KeyboardButton("🍱 Составить меню")],
+        [KeyboardButton("🍽 Анализ питания")],
+        [KeyboardButton("💬 Задать вопрос")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -43,521 +43,387 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n\n"
-        f"🤖 Я SmartFood AI — твой персональный нутрициолог!\n\n"
-        f"Что я умею:\n"
-        f"🧮 Рассчитать твою норму КБЖУ\n"
-        f"🍱 Составить меню на день\n"
-        f"📸 Анализировать еду по фото\n"
-        f"💬 Отвечать на вопросы о питании\n"
-        f"📊 Вести твой профиль\n\n"
+        f"Я SmartFood AI — твой персональный AI-нутрициолог!\n\n"
+        f"🧮 Рассчитать КБЖУ — определю твою норму\n"
+        f"🍱 Составить меню — создам рацион под тебя\n"
+        f"🍽 Анализ питания — оценю что ты ешь\n"
+        f"💬 Задать вопрос — спроси что угодно\n\n"
         f"Выбери действие 👇",
         reply_markup=get_main_keyboard()
     )
 
-# === РАСЧЕТ КБЖУ ===
+# === РАСЧЕТ КБЖУ ЧЕРЕЗ AI ===
 async def calculate_kbzhu_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало расчета КБЖУ"""
-    keyboard = [
-        [KeyboardButton("👨 Мужской"), KeyboardButton("👩 Женский")]
-    ]
+    """Начало расчета КБЖУ через AI"""
     await update.message.reply_text(
-        "🧮 Начинаем расчет КБЖУ!\n\n"
-        "Шаг 1/6: Укажите ваш пол:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        "🧮 Для расчета КБЖУ ответьте на вопросы одним сообщением:\n\n"
+        "1. Ваш пол (м/ж)?\n"
+        "2. Возраст?\n"
+        "3. Вес (кг)?\n"
+        "4. Рост (см)?\n"
+        "5. Уровень активности (низкий/средний/высокий)?\n"
+        "6. Цель (похудеть/поддержать/набрать массу)?\n\n"
+        "Пример ответа:\n"
+        "Мужчина, 30 лет, 80 кг, 180 см, средняя активность, похудеть"
     )
-    return WAITING_GENDER
+    return WAITING_KBZHU_DATA
 
-async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение пола"""
-    user_id = update.effective_user.id
-    if user_id not in user_data:
-        user_data[user_id] = {}
-    
-    text = update.message.text
-    if "Мужской" in text:
-        user_data[user_id]['gender'] = 'male'
-    else:
-        user_data[user_id]['gender'] = 'female'
-    
-    await update.message.reply_text("Шаг 2/6: Введите ваш возраст (например: 25):")
-    return WAITING_AGE
-
-async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение возраста"""
-    user_id = update.effective_user.id
-    try:
-        age = int(update.message.text)
-        if age < 10 or age > 100:
-            raise ValueError
-        user_data[user_id]['age'] = age
-        await update.message.reply_text("Шаг 3/6: Введите ваш вес в кг (например: 70):")
-        return WAITING_WEIGHT
-    except:
-        await update.message.reply_text("❌ Введите корректный возраст (число от 10 до 100):")
-        return WAITING_AGE
-
-async def get_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение веса"""
-    user_id = update.effective_user.id
-    try:
-        weight = float(update.message.text.replace(',', '.'))
-        if weight < 30 or weight > 300:
-            raise ValueError
-        user_data[user_id]['weight'] = weight
-        await update.message.reply_text("Шаг 4/6: Введите ваш рост в см (например: 175):")
-        return WAITING_HEIGHT
-    except:
-        await update.message.reply_text("❌ Введите корректный вес (число от 30 до 300):")
-        return WAITING_WEIGHT
-
-async def get_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение роста"""
-    user_id = update.effective_user.id
-    try:
-        height = int(update.message.text)
-        if height < 100 or height > 250:
-            raise ValueError
-        user_data[user_id]['height'] = height
-        
-        keyboard = [
-            [KeyboardButton("🛋 Минимальная (сидячая работа)")],
-            [KeyboardButton("🚶 Легкая (1-3 тренировки)")],
-            [KeyboardButton("🏃 Средняя (3-5 тренировок)")],
-            [KeyboardButton("💪 Высокая (6-7 тренировок)")],
-            [KeyboardButton("🔥 Экстремальная (спортсмен)")]
-        ]
-        await update.message.reply_text(
-            "Шаг 5/6: Выберите уровень активности:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        )
-        return WAITING_ACTIVITY
-    except:
-        await update.message.reply_text("❌ Введите корректный рост (число от 100 до 250):")
-        return WAITING_HEIGHT
-
-async def get_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение уровня активности"""
-    user_id = update.effective_user.id
-    text = update.message.text
-    
-    if "Минимальная" in text:
-        user_data[user_id]['activity'] = 1.2
-    elif "Легкая" in text:
-        user_data[user_id]['activity'] = 1.375
-    elif "Средняя" in text:
-        user_data[user_id]['activity'] = 1.55
-    elif "Высокая" in text:
-        user_data[user_id]['activity'] = 1.725
-    else:
-        user_data[user_id]['activity'] = 1.9
-    
-    keyboard = [
-        [KeyboardButton("🔽 Похудеть")],
-        [KeyboardButton("⚖️ Поддержать вес")],
-        [KeyboardButton("🔼 Набрать массу")]
-    ]
-    await update.message.reply_text(
-        "Шаг 6/6: Какая ваша цель?",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    )
-    return WAITING_GOAL
-
-async def calculate_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Финальный расчет КБЖУ"""
-    user_id = update.effective_user.id
-    text = update.message.text
-    
-    if "Похудеть" in text:
-        user_data[user_id]['goal'] = 'lose'
-        modifier = 0.85  # Дефицит 15%
-    elif "Набрать" in text:
-        user_data[user_id]['goal'] = 'gain'
-        modifier = 1.15  # Профицит 15%
-    else:
-        user_data[user_id]['goal'] = 'maintain'
-        modifier = 1.0
-    
-    # Расчет базового метаболизма (формула Миффлина-Сан Жеора)
-    data = user_data[user_id]
-    if data['gender'] == 'male':
-        bmr = 10 * data['weight'] + 6.25 * data['height'] - 5 * data['age'] + 5
-    else:
-        bmr = 10 * data['weight'] + 6.25 * data['height'] - 5 * data['age'] - 161
-    
-    # Общий расход калорий
-    tdee = bmr * data['activity']
-    
-    # С учетом цели
-    calories = tdee * modifier
-    
-    # Расчет БЖУ
-    proteins = data['weight'] * 2  # 2г на кг веса
-    fats = calories * 0.25 / 9  # 25% от калорий
-    carbs = (calories - (proteins * 4) - (fats * 9)) / 4
-    
-    # Сохраняем результаты
-    user_data[user_id]['calories'] = round(calories)
-    user_data[user_id]['proteins'] = round(proteins)
-    user_data[user_id]['fats'] = round(fats)
-    user_data[user_id]['carbs'] = round(carbs)
-    
-    result_text = (
-        f"✅ Ваша норма КБЖУ рассчитана!\n\n"
-        f"🎯 Цель: {'Похудение' if data['goal'] == 'lose' else 'Набор массы' if data['goal'] == 'gain' else 'Поддержание'}\n\n"
-        f"📊 Ваши показатели:\n"
-        f"🔥 Калории: {round(calories)} ккал\n"
-        f"🥩 Белки: {round(proteins)} г\n"
-        f"🥑 Жиры: {round(fats)} г\n"
-        f"🍞 Углеводы: {round(carbs)} г\n\n"
-        f"💧 Вода: {round(data['weight'] * 30)} мл/день\n\n"
-        f"💾 Данные сохранены в профиле!"
-    )
-    
-    await update.message.reply_text(result_text, reply_markup=get_main_keyboard())
-    return ConversationHandler.END
-
-# === МЕНЮ НА ДЕНЬ ===
-async def menu_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Составление меню на день"""
+async def process_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка данных для КБЖУ через AI"""
+    user_info = update.message.text
     user_id = update.effective_user.id
     
-    if user_id not in user_data or 'calories' not in user_data.get(user_id, {}):
-        await update.message.reply_text(
-            "❌ Сначала рассчитайте КБЖУ!\n"
-            "Нажмите кнопку «🧮 Рассчитать КБЖУ»",
-            reply_markup=get_main_keyboard()
-        )
-        return
-    
-    data = user_data[user_id]
-    await update.message.reply_text("⏳ Составляю меню на день...")
+    await update.message.reply_text("⏳ Рассчитываю ваши КБЖУ через AI...")
     
     try:
         client = get_client()
         if not client:
             raise ValueError("No OpenAI client")
-            
+        
         prompt = f"""
-        Составь меню на день:
-        Калории: {data['calories']} ккал
-        Белки: {data['proteins']} г
-        Жиры: {data['fats']} г
-        Углеводы: {data['carbs']} г
+        Ты профессиональный нутрициолог. Рассчитай КБЖУ для человека:
+        {user_info}
         
-        Формат ответа:
-        ЗАВТРАК (время):
-        - продукт (граммы) 
+        Используй формулу Миффлина-Сан Жеора для расчета базового метаболизма.
+        Учти уровень активности и цель.
         
-        ПЕРЕКУС:
-        - продукт (граммы)
+        Ответь в формате:
+        📊 РЕЗУЛЬТАТЫ РАСЧЕТА:
+        - Базовый метаболизм: ... ккал
+        - С учетом активности: ... ккал
+        - Для вашей цели: ... ккал
         
-        ОБЕД:
-        - продукт (граммы)
+        🎯 ВАША НОРМА:
+        Калории: ... ккал
+        Белки: ... г (примерно ...г на кг веса)
+        Жиры: ... г  
+        Углеводы: ... г
+        Вода: ... литра
         
-        ПОЛДНИК:
-        - продукт (граммы)
-        
-        УЖИН:
-        - продукт (граммы)
-        
-        ИТОГО: точные КБЖУ
+        💡 РЕКОМЕНДАЦИИ:
+        (дай 3 персональных совета)
         """
         
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты опытный нутрициолог. Составляешь четкое меню по КБЖУ. Используй простые доступные продукты."},
+                {"role": "system", "content": "Ты опытный нутрициолог. Даешь точные расчеты и полезные советы."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=1000,
-            temperature=0.7
+            max_tokens=800,
+            temperature=0.3
         )
         
-        menu_text = response.choices[0].message.content
-        await update.message.reply_text(f"🍱 Меню на день:\n\n{menu_text}", reply_markup=get_main_keyboard())
-    except Exception as e:
-        logger.error(f"Error creating menu: {e}")
-        # Запасной вариант - готовое меню
-        backup_menu = f"""🍱 Меню на день (по вашим КБЖУ):
-
-☀️ ЗАВТРАК (8:00):
-• Овсянка на воде - 60г
-• Яйца вареные - 2 шт
-• Банан - 1 шт
-• Орехи - 20г
-
-🥤 ПЕРЕКУС (11:00):
-• Творог 5% - 150г
-• Ягоды - 100г
-
-🍽 ОБЕД (14:00):
-• Куриная грудка - 150г
-• Рис отварной - 80г
-• Салат овощной - 200г
-• Масло оливковое - 10мл
-
-🍎 ПОЛДНИК (17:00):
-• Яблоко - 1 шт
-• Миндаль - 30г
-
-🌙 УЖИН (19:00):
-• Рыба запеченная - 150г
-• Овощи тушеные - 200г
-
-📊 ИТОГО:
-🔥 {data['calories']} ккал
-🥩 {data['proteins']}г белка
-🥑 {data['fats']}г жиров
-🍞 {data['carbs']}г углеводов"""
+        result = response.choices[0].message.content
         
-        await update.message.reply_text(backup_menu, reply_markup=get_main_keyboard())
+        # Сохраняем данные пользователя
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        user_data[user_id]['kbzhu_info'] = user_info
+        user_data[user_id]['kbzhu_result'] = result
+        
+        await update.message.reply_text(result, reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logger.error(f"Error calculating KBZHU: {e}")
+        # Если API не работает, даем примерный расчет
+        await update.message.reply_text(
+            "📊 Примерный расчет КБЖУ:\n\n"
+            "Для точного расчета нужна связь с AI.\n"
+            "Пока используйте примерные нормы:\n\n"
+            "Женщины: 1800-2000 ккал\n"
+            "Мужчины: 2200-2500 ккал\n\n"
+            "Белки: 1.5-2г на кг веса\n"
+            "Жиры: 0.8-1г на кг веса\n"
+            "Углеводы: оставшиеся калории\n\n"
+            "Попробуйте позже для точного расчета!",
+            reply_markup=get_main_keyboard()
+        )
+    
+    return ConversationHandler.END
 
-# === ЗАДАТЬ ВОПРОС ===
-async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога с вопросом"""
+# === СОСТАВЛЕНИЕ МЕНЮ ЧЕРЕЗ AI ===
+async def menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало составления меню"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, есть ли сохраненные КБЖУ
+    if user_id in user_data and 'kbzhu_result' in user_data[user_id]:
+        kbzhu_info = "\nУчитываю ваши рассчитанные КБЖУ."
+    else:
+        kbzhu_info = "\nСначала рассчитайте КБЖУ для точного меню."
+    
     await update.message.reply_text(
-        "💬 Задайте любой вопрос о питании!\n\n"
-        "Например:\n"
-        "• Можно ли есть после 18:00?\n"
-        "• Чем заменить сахар?\n"
-        "• Какие продукты содержат белок?\n"
-        "• Как убрать живот?\n"
-        "• Полезен ли кефир на ночь?\n\n"
-        "Напишите ваш вопрос:"
+        f"🍱 Составлю персональное меню!{kbzhu_info}\n\n"
+        "Напишите одним сообщением:\n\n"
+        "1. На сколько дней составить меню? (1-7)\n"
+        "2. Какие продукты ОБЯЗАТЕЛЬНО включить?\n"
+        "3. Какие продукты ИСКЛЮЧИТЬ?\n"
+        "4. Есть ли аллергии?\n"
+        "5. Предпочтения (веган, кето, и т.д.)?\n\n"
+        "Пример:\n"
+        "1 день, люблю курицу и овощи, без молочки, аллергия на орехи, обычное питание"
     )
-    return WAITING_QUESTION
+    return WAITING_MENU_PREFERENCES
 
-async def process_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка вопроса"""
-    question = update.message.text
-    await update.message.reply_text("⏳ Думаю над ответом...")
+async def process_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Составление меню через AI"""
+    preferences = update.message.text
+    user_id = update.effective_user.id
+    
+    await update.message.reply_text("⏳ AI составляет персональное меню...")
     
     try:
         client = get_client()
         if not client:
             raise ValueError("No OpenAI client")
-            
+        
+        # Добавляем КБЖУ если есть
+        if user_id in user_data and 'kbzhu_result' in user_data[user_id]:
+            kbzhu_context = f"\n\nРанее рассчитанные КБЖУ:\n{user_data[user_id]['kbzhu_result']}"
+        else:
+            kbzhu_context = ""
+        
+        prompt = f"""
+        Составь детальное меню по запросу:
+        {preferences}
+        {kbzhu_context}
+        
+        Формат ответа:
+        
+        📅 МЕНЮ НА [количество дней]
+        
+        ДЕНЬ 1:
+        
+        🌅 ЗАВТРАК (время):
+        • Блюдо - граммовка
+        • Напиток
+        КБЖУ: ... ккал, Б:...г, Ж:...г, У:...г
+        
+        🥤 ПЕРЕКУС 1:
+        • Что съесть
+        КБЖУ: ...
+        
+        🍽 ОБЕД:
+        • Блюда с граммовкой
+        КБЖУ: ...
+        
+        🍎 ПЕРЕКУС 2:
+        • Что съесть
+        КБЖУ: ...
+        
+        🌙 УЖИН:
+        • Блюда с граммовкой
+        КБЖУ: ...
+        
+        📊 ИТОГО ЗА ДЕНЬ:
+        Калории: ...
+        Белки: ...
+        Жиры: ...
+        Углеводы: ...
+        
+        📝 СПИСОК ПОКУПОК:
+        (все продукты с количеством)
+        
+        💡 СОВЕТЫ ПО ПРИГОТОВЛЕНИЮ:
+        (3 полезных совета)
+        """
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты опытный нутрициолог. Отвечай на вопросы кратко, понятно, по делу. Используй эмодзи. На русском языке."},
+                {"role": "system", "content": "Ты профессиональный нутрициолог и повар. Составляешь вкусные и полезные меню с точным КБЖУ."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1500,
+            temperature=0.5
+        )
+        
+        menu = response.choices[0].message.content
+        await update.message.reply_text(menu, reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logger.error(f"Error creating menu: {e}")
+        await update.message.reply_text(
+            "❌ Не удалось составить меню через AI.\n\n"
+            "Попробуйте:\n"
+            "• Упростить запрос\n"
+            "• Повторить позже\n"
+            "• Сначала рассчитать КБЖУ",
+            reply_markup=get_main_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+# === АНАЛИЗ ПИТАНИЯ ===
+async def analyze_food_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало анализа питания"""
+    await update.message.reply_text(
+        "🍽 Опишите что вы съели или планируете съесть.\n\n"
+        "Можете написать:\n"
+        "• Одно блюдо: 'Цезарь с курицей'\n"
+        "• Весь прием пищи: 'гречка 150г, куриная грудка 100г, салат'\n"
+        "• Весь день: 'завтрак - овсянка с бананом, обед - борщ...'\n\n"
+        "Чем подробнее опишете, тем точнее будет анализ!"
+    )
+    return WAITING_FOOD_INFO
+
+async def process_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Анализ еды через AI"""
+    food_description = update.message.text
+    
+    await update.message.reply_text("⏳ AI анализирует питание...")
+    
+    try:
+        client = get_client()
+        if not client:
+            raise ValueError("No OpenAI client")
+        
+        prompt = f"""
+        Проанализируй питание: {food_description}
+        
+        Дай ответ в формате:
+        
+        🍽 АНАЛИЗ БЛЮДА/РАЦИОНА:
+        
+        📊 СОСТАВ (если не указан вес, оцени примерно):
+        • [Продукт] - [вес]г
+        • ...
+        
+        📈 ПИЩЕВАЯ ЦЕННОСТЬ:
+        🔥 Калории: ... ккал
+        🥩 Белки: ... г
+        🥑 Жиры: ... г (насыщенные: ...г)
+        🍞 Углеводы: ... г (сахар: ...г)
+        🥬 Клетчатка: ... г
+        
+        💎 МИКРОНУТРИЕНТЫ:
+        • Основные витамины
+        • Основные минералы
+        
+        ⚖️ ОЦЕНКА:
+        • Сбалансированность: .../10
+        • Полезность: .../10
+        • Калорийность: (низкая/средняя/высокая)
+        
+        ✅ ПЛЮСЫ:
+        • ...
+        
+        ⚠️ МИНУСЫ:
+        • ...
+        
+        💡 РЕКОМЕНДАЦИИ:
+        • Как улучшить это блюдо/рацион
+        • Что добавить/убрать
+        • Когда лучше есть
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ты опытный нутрициолог. Даешь точный анализ питания с расчетом КБЖУ."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.3
+        )
+        
+        analysis = response.choices[0].message.content
+        await update.message.reply_text(analysis, reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logger.error(f"Error analyzing food: {e}")
+        await update.message.reply_text(
+            "❌ Не удалось проанализировать через AI.\n"
+            "Попробуйте позже или упростите описание.",
+            reply_markup=get_main_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+# === СВОБОДНЫЙ ДИАЛОГ С AI ===
+async def ask_ai_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало диалога с AI"""
+    await update.message.reply_text(
+        "💬 Задайте любой вопрос о питании, диетах, здоровье!\n\n"
+        "Например:\n"
+        "• Как убрать живот?\n"
+        "• Можно ли есть после 6?\n"
+        "• Что есть после тренировки?\n"
+        "• Вреден ли глютен?\n"
+        "• Как набрать мышечную массу?\n\n"
+        "Пишите ваш вопрос:"
+    )
+    return WAITING_AI_RESPONSE
+
+async def process_ai_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка вопроса через AI"""
+    question = update.message.text
+    
+    # Если это не вопрос, а команда/кнопка - выходим
+    if question in ["🧮 Рассчитать КБЖУ", "🍱 Составить меню", "🍽 Анализ питания", "💬 Задать вопрос"]:
+        return ConversationHandler.END
+    
+    await update.message.reply_text("⏳ AI обдумывает ответ...")
+    
+    try:
+        client = get_client()
+        if not client:
+            raise ValueError("No OpenAI client")
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": """Ты опытный нутрициолог и диетолог с 20-летним стажем. 
+                Отвечаешь подробно, с научным обоснованием, но понятным языком. 
+                Используешь эмодзи для наглядности. 
+                Даешь практические советы.
+                Если вопрос не про питание/здоровье - вежливо говоришь что консультируешь только по питанию."""},
                 {"role": "user", "content": question}
             ],
-            max_tokens=500,
+            max_tokens=800,
             temperature=0.7
         )
         
         answer = response.choices[0].message.content
-        await update.message.reply_text(f"💡 Ответ:\n\n{answer}", reply_markup=get_main_keyboard())
-    except Exception as e:
-        logger.error(f"Error answering question: {e}")
-        # Запасной ответ
+        
+        # Добавляем возможность задать следующий вопрос
         await update.message.reply_text(
-            "💡 К сожалению, не могу сейчас ответить на вопрос.\n\n"
-            "Попробуйте:\n"
-            "• Переформулировать вопрос\n"
-            "• Задать вопрос позже\n"
-            "• Написать конкретнее\n\n"
-            "Либо воспользуйтесь другими функциями бота!",
+            f"{answer}\n\n"
+            "➡️ Можете задать следующий вопрос или выбрать действие в меню:",
             reply_markup=get_main_keyboard()
         )
-    
-    return ConversationHandler.END
-
-# === АНАЛИЗ ФОТО ===
-async def photo_analysis_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос фото еды"""
-    await update.message.reply_text(
-        "📸 Отправьте фото вашей еды!\n\n"
-        "Я определю:\n"
-        "• Что это за блюдо\n"
-        "• Примерный вес порции\n"
-        "• Калории и БЖУ\n"
-        "• Полезность блюда\n\n"
-        "📷 Отправьте фото 👇"
-    )
-    return WAITING_PHOTO
-
-async def analyze_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Анализ фото еды"""
-    await update.message.reply_text("⏳ Анализирую фото...")
-    
-    try:
-        # Список возможных блюд для анализа
-        dishes = [
-            {
-                "name": "🍰 Шоколадный торт",
-                "weight": 120,
-                "calories": 420,
-                "proteins": 6,
-                "fats": 22,
-                "carbs": 52,
-                "rating": "⚠️ Высококалорийный десерт",
-                "tip": "Лучше есть в первой половине дня"
-            },
-            {
-                "name": "🥗 Салат Цезарь",
-                "weight": 250,
-                "calories": 320,
-                "proteins": 22,
-                "fats": 24,
-                "carbs": 8,
-                "rating": "✅ Сбалансированное блюдо",
-                "tip": "Хороший вариант для обеда"
-            },
-            {
-                "name": "🍝 Паста Карбонара",
-                "weight": 300,
-                "calories": 480,
-                "proteins": 18,
-                "fats": 26,
-                "carbs": 42,
-                "rating": "⚠️ Калорийное блюдо",
-                "tip": "Подойдет после тренировки"
-            },
-            {
-                "name": "🍲 Борщ с мясом",
-                "weight": 350,
-                "calories": 280,
-                "proteins": 16,
-                "fats": 12,
-                "carbs": 26,
-                "rating": "✅ Отличный выбор",
-                "tip": "Полноценный обед"
-            },
-            {
-                "name": "🍗 Куриная грудка с гречкой",
-                "weight": 300,
-                "calories": 380,
-                "proteins": 42,
-                "fats": 8,
-                "carbs": 38,
-                "rating": "🏆 Идеальное блюдо",
-                "tip": "Отличное соотношение БЖУ"
-            },
-            {
-                "name": "🥞 Блины с начинкой",
-                "weight": 200,
-                "calories": 360,
-                "proteins": 12,
-                "fats": 16,
-                "carbs": 44,
-                "rating": "😋 Вкусно, но калорийно",
-                "tip": "Не чаще 1-2 раз в неделю"
-            },
-            {
-                "name": "🍕 Пицца Маргарита",
-                "weight": 150,
-                "calories": 380,
-                "proteins": 14,
-                "fats": 18,
-                "carbs": 42,
-                "rating": "⚠️ Фастфуд",
-                "tip": "Лучше готовить дома"
-            },
-            {
-                "name": "🍣 Роллы ассорти",
-                "weight": 250,
-                "calories": 310,
-                "proteins": 18,
-                "fats": 12,
-                "carbs": 36,
-                "rating": "✅ Неплохой вариант",
-                "tip": "Выбирайте без майонеза"
-            }
-        ]
         
-        # Выбираем случайное блюдо
-        dish = random.choice(dishes)
-        
-        # Получаем ID пользователя для персонализации
-        user_id = update.effective_user.id
-        
-        # Проверяем есть ли у пользователя рассчитанные КБЖУ
-        if user_id in user_data and 'calories' in user_data[user_id]:
-            daily_calories = user_data[user_id]['calories']
-            daily_proteins = user_data[user_id]['proteins']
-            percent_calories = round(dish["calories"] / daily_calories * 100)
-            percent_proteins = round(dish["proteins"] / daily_proteins * 100)
-            
-            personal_info = f"""
-📊 От вашей дневной нормы:
-• Калории: {percent_calories}%
-• Белки: {percent_proteins}%"""
-        else:
-            personal_info = "\n💡 Рассчитайте КБЖУ для персональных рекомендаций"
-        
-        result_text = f"""📸 Результат анализа:
-
-{dish["name"]}
-⚖️ Примерный вес: {dish["weight"]}г
-
-📈 Пищевая ценность:
-🔥 Калории: {dish["calories"]} ккал
-🥩 Белки: {dish["proteins"]}г
-🥑 Жиры: {dish["fats"]}г
-🍞 Углеводы: {dish["carbs"]}г
-
-🏷 Оценка: {dish["rating"]}
-💡 Совет: {dish["tip"]}
-{personal_info}"""
-        
-        await update.message.reply_text(result_text, reply_markup=get_main_keyboard())
+        # Остаемся в режиме вопросов
+        return WAITING_AI_RESPONSE
         
     except Exception as e:
-        logger.error(f"Error analyzing photo: {e}")
+        logger.error(f"Error with AI question: {e}")
         await update.message.reply_text(
-            "❌ Не удалось проанализировать фото.\n"
-            "Попробуйте сделать фото при хорошем освещении.",
+            "❌ Не удалось получить ответ от AI.\n"
+            "Попробуйте переформулировать или повторить позже.",
             reply_markup=get_main_keyboard()
         )
-    
-    return ConversationHandler.END
-
-# === МОЙ ПРОФИЛЬ ===
-async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ профиля пользователя"""
-    user_id = update.effective_user.id
-    user = update.effective_user
-    
-    if user_id not in user_data or 'calories' not in user_data.get(user_id, {}):
-        await update.message.reply_text(
-            f"📊 Ваш профиль\n\n"
-            f"👤 Имя: {user.first_name}\n"
-            f"🆔 ID: {user.id}\n\n"
-            f"❌ КБЖУ не рассчитаны\n\n"
-            f"Нажмите «🧮 Рассчитать КБЖУ» чтобы:\n"
-            f"• Узнать свою норму калорий\n"
-            f"• Получить персональные рекомендации\n"
-            f"• Составить меню на день",
-            reply_markup=get_main_keyboard()
-        )
-    else:
-        data = user_data[user_id]
-        goal_text = 'Похудение 🔽' if data['goal'] == 'lose' else 'Набор массы 🔼' if data['goal'] == 'gain' else 'Поддержание веса ⚖️'
-        
-        await update.message.reply_text(
-            f"📊 Ваш профиль\n\n"
-            f"👤 Имя: {user.first_name}\n"
-            f"⚖️ Вес: {data['weight']} кг\n"
-            f"📏 Рост: {data['height']} см\n"
-            f"🎂 Возраст: {data['age']} лет\n"
-            f"{'👨' if data['gender'] == 'male' else '👩'} Пол: {'Мужской' if data['gender'] == 'male' else 'Женский'}\n\n"
-            f"📈 Ваша норма КБЖУ:\n"
-            f"🔥 Калории: {data['calories']} ккал\n"
-            f"🥩 Белки: {data['proteins']} г\n"
-            f"🥑 Жиры: {data['fats']} г\n"
-            f"🍞 Углеводы: {data['carbs']} г\n"
-            f"💧 Вода: {round(data['weight'] * 30)} мл\n\n"
-            f"🎯 Цель: {goal_text}",
-            reply_markup=get_main_keyboard()
-        )
+        return ConversationHandler.END
 
 # === ОТМЕНА ===
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена текущей операции"""
-    await update.message.reply_text("❌ Операция отменена", reply_markup=get_main_keyboard())
+    """Отмена операции"""
+    await update.message.reply_text(
+        "❌ Отменено. Выберите действие:",
+        reply_markup=get_main_keyboard()
+    )
     return ConversationHandler.END
+
+# === ОБРАБОТКА ФОТО ===
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка фото еды"""
+    await update.message.reply_text(
+        "📸 Получил фото! Анализирую...\n\n"
+        "⚠️ Анализ фото пока в разработке.\n"
+        "Пока опишите текстом что на фото, и я проанализирую!",
+        reply_markup=get_main_keyboard()
+    )
 
 def main():
     """Главная функция"""
@@ -569,47 +435,54 @@ def main():
     app = Application.builder().token(token).build()
     
     # Обработчик расчета КБЖУ
-    kbzhu_handler = ConversationHandler(
+    kbzhu_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🧮 Рассчитать КБЖУ$"), calculate_kbzhu_start)],
         states={
-            WAITING_GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
-            WAITING_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_age)],
-            WAITING_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weight)],
-            WAITING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_height)],
-            WAITING_ACTIVITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_activity)],
-            WAITING_GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, calculate_final)]
+            WAITING_KBZHU_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_kbzhu)]
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
-    # Обработчик вопросов
-    question_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^💬 Задать вопрос$"), ask_question_start)],
+    # Обработчик составления меню
+    menu_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🍱 Составить меню$"), menu_start)],
         states={
-            WAITING_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_question)]
+            WAITING_MENU_PREFERENCES: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_menu)]
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
-    # Обработчик фото
-    photo_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^📸 Анализ по фото$"), photo_analysis_start)],
+    # Обработчик анализа питания
+    food_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🍽 Анализ питания$"), analyze_food_start)],
         states={
-            WAITING_PHOTO: [MessageHandler(filters.PHOTO, analyze_photo)]
+            WAITING_FOOD_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_food)]
         },
         fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    
+    # Обработчик вопросов к AI (с продолжением диалога)
+    ai_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^💬 Задать вопрос$"), ask_ai_start)],
+        states={
+            WAITING_AI_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_ai_question)]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^(🧮|🍱|🍽|💬)"), cancel)
+        ]
     )
     
     # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(kbzhu_handler)
-    app.add_handler(question_handler)
-    app.add_handler(photo_handler)
-    app.add_handler(MessageHandler(filters.Regex("^🍱 Меню на день$"), menu_day))
-    app.add_handler(MessageHandler(filters.Regex("^📊 Мой профиль$"), show_profile))
+    app.add_handler(kbzhu_conv)
+    app.add_handler(menu_conv)
+    app.add_handler(food_conv)
+    app.add_handler(ai_conv)
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     # Запуск бота
-    logger.info("Bot starting...")
+    logger.info("SmartFood AI Bot starting...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
