@@ -91,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     
-    # Сброс состояния ожидания
+    # Сброс состояния
     context.user_data.clear()
     
     if user_id not in users_db:
@@ -170,8 +170,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• AI-анализ любых блюд\n"
             "• Расчет личной нормы КБЖУ\n"
             "• Дневник питания\n"
-            "• 10 вопросов AI в день\n"
-            "• Доступ к каналу с контентом",
+            "• 10 вопросов AI в день",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -230,8 +229,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # === ОСНОВНЫЕ ФУНКЦИИ (С ДОСТУПОМ) ===
-    
+    # ОСНОВНЫЕ ФУНКЦИИ
     if text == "🧮 КБЖУ":
         context.user_data['waiting_for'] = 'kbzhu_input'
         await update.message.reply_text(
@@ -289,7 +287,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             water = meals_db.get(user_id, {}).get('water', 0)
             meals_count = len(meals_db.get(user_id, {}).get('meals', []))
             
-            # Считаем съеденное за день
             eaten_cal = sum(m.get('calories', 0) for m in meals_db.get(user_id, {}).get('meals', []))
             eaten_prot = sum(m.get('protein', 0) for m in meals_db.get(user_id, {}).get('meals', []))
             eaten_fats = sum(m.get('fats', 0) for m in meals_db.get(user_id, {}).get('meals', []))
@@ -299,12 +296,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 **СТАТИСТИКА ДНЯ**\n\n"
                 f"📈 Съедено / Норма:\n"
                 f"🔥 Калории: {eaten_cal}/{cal} ккал ({eaten_cal*100//cal if cal else 0}%)\n"
-                f"🥩 Белки: {eaten_prot}/{prot} г\n"
-                f"🥑 Жиры: {eaten_fats}/{fats} г\n"
-                f"🍞 Углеводы: {eaten_carbs}/{carbs} г\n\n"
+                f"🥩 Белки: {eaten_prot:.0f}/{prot} г\n"
+                f"🥑 Жиры: {eaten_fats:.0f}/{fats} г\n"
+                f"🍞 Углеводы: {eaten_carbs:.0f}/{carbs} г\n\n"
                 f"💧 Вода: {water}/2000 мл\n"
-                f"🍽 Приемов пищи: {meals_count}\n\n"
-                f"{'✅ Отличный день!' if eaten_cal < cal else '⚠️ Превышение нормы'}",
+                f"🍽 Приемов пищи: {meals_count}",
                 parse_mode='Markdown'
             )
         else:
@@ -316,7 +312,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     elif text == "❓ Вопрос о еде":
-        # Проверяем лимит вопросов
         today = datetime.now().strftime("%Y-%m-%d")
         if users_db[user_id].get('questions_date') != today:
             users_db[user_id]['questions_today'] = 0
@@ -390,7 +385,6 @@ async def calculate_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = get_openai_client()
         
         if not client:
-            # Примерный расчет без API
             calories = 2000
             protein = 100
             fats = 70
@@ -422,7 +416,6 @@ async def calculate_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             result = response.choices[0].message.content
             
-            # Извлекаем числа
             try:
                 calories = int(re.search(r'КАЛОРИИ:\s*(\d+)', result).group(1))
                 protein = int(re.search(r'БЕЛКИ:\s*(\d+)', result).group(1))
@@ -434,7 +427,6 @@ async def calculate_kbzhu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fats = 70
                 carbs = 250
         
-        # Сохраняем
         users_db[user_id]['calories'] = calories
         users_db[user_id]['protein'] = protein
         users_db[user_id]['fats'] = fats
@@ -506,7 +498,6 @@ async def analyze_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = get_openai_client()
         
         if not client:
-            # Примерные значения без API
             calories = 350
             protein = 25
             fats = 15
@@ -547,7 +538,6 @@ async def analyze_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fats = 15
                 carbs = 40
         
-        # Сохраняем
         if user_id not in meals_db:
             meals_db[user_id] = {'water': 0, 'meals': []}
         
@@ -577,7 +567,7 @@ async def analyze_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_keyboard(has_premium or status == 'trial')
         )
     except Exception as e:
-        logger.error(f"Meal analysis error: {e}")
+        logger.error(f"Meal error: {e}")
         await update.message.reply_text("❌ Ошибка анализа. Попробуйте описать иначе.")
     
     context.user_data['waiting_for'] = None
@@ -587,7 +577,6 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = update.message.text
     user_id = str(update.effective_user.id)
     
-    # Увеличиваем счетчик
     users_db[user_id]['questions_today'] = users_db[user_id].get('questions_today', 0) + 1
     questions_left = 10 - users_db[user_id]['questions_today']
     
@@ -602,7 +591,7 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Ты опытный диетолог-нутрициолог. Даешь краткие, полезные советы по питанию. Отвечай на русском языке."},
+                    {"role": "system", "content": "Ты опытный диетолог. Даешь краткие полезные советы по питанию на русском языке."},
                     {"role": "user", "content": question}
                 ],
                 max_tokens=500,
@@ -613,4 +602,19 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status, _ = get_user_status(update.effective_user.id)
         has_premium = await check_subscription(context, update.effective_user.id)
         
-        await update.message.
+        await update.message.reply_text(
+            f"💬 **ОТВЕТ AI:**\n\n"
+            f"{answer}\n\n"
+            f"Осталось вопросов сегодня: {questions_left}/10",
+            parse_mode='Markdown',
+            reply_markup=get_keyboard(has_premium or status == 'trial')
+        )
+    except Exception as e:
+        logger.error(f"Question error: {e}")
+        await update.message.reply_text("❌ Ошибка AI. Попробуйте позже.")
+    
+    context.user_data['waiting_for'] = None
+
+def main():
+    """Запуск бота"""
+    token =
