@@ -7,8 +7,8 @@ from openai import OpenAI
 
 # ================= НАСТРОЙКИ =================
 # Бот сам возьмет ключи из переменных Railway
-TELEGRAM_TOKEN = 8605434358:AAFeloa5r-3n1rdkK3qNnC0tkkbZlinBSEM
-OPENAI_API_KEY = sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y
+TELEGRAM_TOKEN = "8605434358:AAFeloa5r-3n1rdkK3qNnC0tkkbZlinBSEM"
+OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
 
 # Ссылка на оплату Paywall
 PAYWALL_LINK = "https://paywall.pw/chef_vip" 
