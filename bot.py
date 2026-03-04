@@ -7,12 +7,12 @@ from openai import OpenAI
 
 # ================= НАСТРОЙКИ =================
 # Бот сам возьмет ключи из переменных Railway
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_TOKEN = 8605434358:AAFeloa5r-3n1rdkK3qNnC0tkkbZlinBSEM
+OPENAI_API_KEY = sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y
 
 # Ссылка на оплату Paywall
 PAYWALL_LINK = "https://paywall.pw/chef_vip" 
-ADMIN_ID = 123456789  # ВПИШИТЕ СЮДА ВАШ ID В TELEGRAM!
+ADMIN_ID = @alexs_v_k
 
 # Лимиты
 FREE_RECIPES_LIMIT = 3
