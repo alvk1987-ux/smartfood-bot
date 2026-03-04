@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # Получаем ключи из Railway
-TELEGRAM_TOKEN = os.getenv("8605434358:AAH5hJYulH1YJIjS8eS88sCb8u3OHpBDqMc")
+TELEGRAM_TOKEN = os.getenv("8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4")
 OPENAI_API_KEY = os.getenv("sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y")
 
 # Настраиваем клиента OpenAI
