@@ -12,7 +12,7 @@ OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
 
 # Ссылка на оплату Paywall
 PAYWALL_LINK = "https://paywall.pw/chef_vip" 
-ADMIN_ID = @alexs_v_k
+ADMIN_ID = 230764474
 
 # Лимиты
 FREE_RECIPES_LIMIT = 3
