@@ -3,15 +3,18 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import AsyncOpenAI
 
-# === ВАШИ КЛЮЧИ ВШИТЫ НАПРЯМУЮ ===
+# === ВАШИ КЛЮЧИ ===
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
 
 # Настройка логов
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Настраиваем ИИ
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Настраиваем ИИ на работу через PROXYAPI.RU (Вот секретный ингредиент!)
+client = AsyncOpenAI(
+    api_key=OPENAI_API_KEY,
+    base_url="https://api.proxyapi.ru/openai/v1"
+)
 
 # Кнопки меню
 MENU = [
@@ -59,7 +62,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(answer)
 
 def main():
-    print("🚀 Запуск полноценного Шеф-повара с ИИ (ключи вшиты напрямую)...")
+    print("🚀 Запуск Шеф-повара через ProxyAPI...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
