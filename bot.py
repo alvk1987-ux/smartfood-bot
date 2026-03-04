@@ -1,20 +1,32 @@
 import os
-from telegram.ext import Application
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("=== НАЧАЛО ЗАПУСКА ===")
+# Настройка логов
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Проверяем токен
+# Получаем токен из Railway
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-if not TOKEN:
-    print("❌ ОШИБКА: ТОКЕН НЕ НАЙДЕН! Проверьте название переменной во вкладке Variables в Railway. Должно быть TELEGRAM_BOT_TOKEN")
-else:
-    print(f"✅ Токен найден (начинается на {TOKEN[:5]}...)")
-    print("Пробуем подключиться к Telegram...")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👨‍🍳 Привет! Я твой бот-повар! Я успешно запустился и готов к работе!")
+
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Вы сказали: {update.message.text}")
+
+def main():
+    if not TOKEN:
+        print("ОШИБКА: Токен не найден!")
+        return
+        
+    print("🚀 ЗАПУСК БОТА...")
+    app = Application.builder().token(TOKEN).build()
     
-    try:
-        app = Application.builder().token(TOKEN).build()
-        print("🚀 БОТ УСПЕШНО ПОДКЛЮЧЕН И РАБОТАЕТ!")
-        app.run_polling()
-    except Exception as e:
-        print(f"❌ ОШИБКА ПРИ ПОДКЛЮЧЕНИИ: {e}")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
