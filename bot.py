@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 # === НАСТРОЙКИ ===
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
-DATABASE_URL = os.getenv("DATABASE_URL") 
+DATABASE_URL = "postgresql://botuser:botpass123@localhost/botdb" 
 ADMIN_ID = 230764474  
 
 # ВАША ССЫЛКА НА ГРУППУ
