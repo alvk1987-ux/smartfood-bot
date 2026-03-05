@@ -1,68 +1,124 @@
+import os
 import logging
+import asyncpg
+from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import AsyncOpenAI
 
-# === ВАШИ КЛЮЧИ ===
+# === ВАШИ НАСТРОЙКИ ===
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
+# Получаем ссылку на базу данных из Railway
+DATABASE_URL = os.getenv("DATABASE_URL") 
 
-# Настройка логов
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Настраиваем ИИ на работу через PROXYAPI.RU (Вот секретный ингредиент!)
-client = AsyncOpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url="https://api.proxyapi.ru/openai/v1"
-)
+# ИИ пока ждет своего часа (мы подключим его к новым кнопкам на следующем шаге)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url="https://api.proxyapi.ru/openai/v1")
 
-# Кнопки меню
-MENU = [
-    ["🍽 Что приготовить?", "🛒 Список покупок"],
-    ["👨‍🍳 Совет шефа", "⭐ Премиум рецепт"]
+# === ВАШЕ НОВОЕ МЕНЮ (Базовое) ===
+MENU_FREE = [
+    ["🔍 Найти рецепт", "🧺 Из продуктов, которые есть дома"],
+    ["⚡ Быстрый ужин"],
+    ["👑 Моя подписка"]
 ]
 
+async def init_db():
+    """Создает в базе данных блокнот для записи пользователей"""
+    if not DATABASE_URL:
+        logging.error("❌ DATABASE_URL не найден! Бот работает без памяти.")
+        return
+    
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        # Создаем таблицу, если ее еще нет
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                status TEXT DEFAULT 'trial',
+                trial_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        await conn.close()
+        print("✅ База данных успешно подключена и готова!")
+    except Exception as e:
+        print(f"❌ Ошибка при подключении к БД: {e}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_markup = ReplyKeyboardMarkup(MENU, resize_keyboard=True)
+    user = update.effective_user
+    
+    # 1. ЗАПИСЫВАЕМ ПОЛЬЗОВАТЕЛЯ В БАЗУ ДАННЫХ
+    if DATABASE_URL:
+        try:
+            conn = await asyncpg.connect(DATABASE_URL)
+            # Записываем ID, если такого еще нет
+            await conn.execute('''
+                INSERT INTO users (user_id, username) 
+                VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING
+            ''', user.id, user.username)
+            await conn.close()
+        except Exception as e:
+            logging.error(f"Ошибка записи в БД: {e}")
+
+    # 2. ПОКАЗЫВАЕМ НОВЫЕ КНОПКИ
+    reply_markup = ReplyKeyboardMarkup(MENU_FREE, resize_keyboard=True)
     await update.message.reply_text(
-        "👨‍🍳 Добро пожаловать! Я ваш персональный Премиальный Шеф.\n\n"
-        "Выберите, что вас интересует в меню ниже, или просто напишите мне из каких продуктов вы хотите приготовить блюдо!",
+        f"👨‍🍳 Добро пожаловать, {user.first_name}!\n\n"
+        "Вам активирован бесплатный доступ ко всем функциям шеф-повара на 2 дня 🎁\n\n"
+        "Выберите, что будем готовить:",
         reply_markup=reply_markup
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
+    text = update.message.text
     
-    # Показываем статус "печатает..."
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-
-    if user_text == "🍽 Что приготовить?":
-        prompt = "Выступи в роли шеф-повара. Предложи 3 интересных и вкусных варианта ужина из простых продуктов."
-    elif user_text == "🛒 Список покупок":
-        prompt = "Выступи в роли диетолога. Составь базовый список продуктов на неделю для здорового и вкусного питания."
-    elif user_text == "👨‍🍳 Совет шефа":
-        prompt = "Дай один очень полезный, но малоизвестный кулинарный лайфхак от профессионального шеф-повара."
-    elif user_text == "⭐ Премиум рецепт":
-        prompt = "Поделись одним подробным пошаговым рецептом ресторанного блюда, которое можно приготовить дома."
-    else:
-        prompt = f"Ответь на следующий вопрос пользователя как опытный и вежливый шеф-повар: {user_text}"
-
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Ты — элитный шеф-повар. Твои ответы всегда структурированные, вежливые и со вкусом."},
-                {"role": "user", "content": prompt}
-            ]
+    # ВАШИ ЗАГОТОВЛЕННЫЕ ОТВЕТЫ
+    if text == "🔍 Найти рецепт":
+        await update.message.reply_text(
+            "Напишите, какой рецепт хотите найти.\n\n"
+            "Примеры:\n"
+            "• куриный суп\n"
+            "• паста с грибами\n"
+            "• салат с тунцом\n"
+            "• шоколадный десерт"
         )
-        answer = response.choices[0].message.content
-    except Exception as e:
-        answer = f"К сожалению, на кухне небольшие технические неполадки с ИИ. Ошибка: {e}"
-
-    await update.message.reply_text(answer)
+    elif text == "🧺 Из продуктов, которые есть дома":
+        await update.message.reply_text(
+            "Напишите продукты, которые у вас есть. Можно через запятую.\n\n"
+            "Примеры:\n"
+            "• курица, картошка, сыр\n"
+            "• яйца, помидоры, хлеб\n"
+            "• рис, курица, морковь"
+        )
+    elif text == "⚡ Быстрый ужин":
+        await update.message.reply_text(
+            "Напишите основной продукт, и я предложу быстрый рецепт.\n\n"
+            "Примеры:\n"
+            "• курица\n"
+            "• фарш\n"
+            "• макароны\n"
+            "• картошка"
+        )
+    elif text == "👑 Моя подписка":
+        await update.message.reply_text(
+            "Статус подписки:\n\n"
+            "Тариф: Пробный (Trial)\n"
+            "Доступ активен: еще 48 часов ⏳\n\n"
+            "*(Здесь позже появится кнопка оплаты)*"
+        )
+    else:
+        await update.message.reply_text("Отличный выбор! *(Здесь скоро будет ответ от ИИ по вашему запросу)* 👨‍🍳")
 
 def main():
-    print("🚀 Запуск Шеф-повара через ProxyAPI...")
+    import asyncio
+    
+    # Подключаем БД до старта бота
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
+    
+    print("🚀 Запуск обновленного бота...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
