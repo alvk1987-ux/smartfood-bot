@@ -3,6 +3,7 @@ import logging
 import asyncpg
 import base64
 import datetime
+import re
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from openai import AsyncOpenAI
@@ -244,9 +245,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
         await context.bot.send_chat_action(chat_id=user_id, action='typing')
+        
+        # ДЕЛАЕМ БОТА УМНЫМ (он запоминает контекст кнопки)
         if state == "replace_ingredient":
             old_recipe = last_recipes.get(user_id, "")
             user_prompt = f"Вот прошлый рецепт:\n{old_recipe}\n\nПользователь просит: {text}. Перепиши рецепт, выполнив эту просьбу, сохранив формат и пересчитав КБЖУ."
+        elif state == "from_fridge":
+            user_prompt = f"Сделай рецепт строго из этих продуктов (или части из них): {text}."
+            last_prompts[user_id] = text
+        elif state == "quick_dinner":
+            user_prompt = f"Сделай очень БЫСТРЫЙ рецепт (до 20 минут), главное: {text}."
+            last_prompts[user_id] = text
+        elif state == "diet_recipe":
+            user_prompt = f"Сделай низкокалорийный ДИЕТИЧЕСКИЙ рецепт для похудения, главное: {text}."
+            last_prompts[user_id] = text
         else:
             user_prompt = f"Запрос: {text}."
             last_prompts[user_id] = text 
@@ -329,29 +341,36 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "add_to_cart":
         try:
-            ingredients = message_text.split("Ингредиенты:\n")[1].split("Приготовление:")[0].strip()
+            # Умный поиск текста через Регулярные Выражения
+            match = re.search(r'(?i)Ингредиенты:(.*?)(?:Приготовление:|$)', message_text, re.DOTALL)
+            if match:
+                ingredients = match.group(1).strip()
+            else:
+                ingredients = message_text # Если формат совсем сбился, сохраняем всё
+
             if DATABASE_URL:
                 conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute("UPDATE users SET shopping_list = shopping_list || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
+                # COALESCE защищает от ошибок "пустой строки" в базе
+                await conn.execute("UPDATE users SET shopping_list = COALESCE(shopping_list, '') || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
                 await conn.close()
                 await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
             else:
                  await context.bot.send_message(chat_id=user_id, text="🛒 Функция сохранения заработает после настройки базы данных!")
-        except:
-            await context.bot.send_message(chat_id=user_id, text="❌ Ошибка: Не удалось найти ингредиенты.")
+        except Exception as e:
+            await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка добавления: {e}")
 
     elif query.data == "save_recipe":
         try:
             full_recipe = f"\n\n➖➖➖➖➖➖➖➖➖➖\n\n{message_text}"
             if DATABASE_URL:
                 conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute("UPDATE users SET saved_recipes = saved_recipes || $1 WHERE user_id = $2", full_recipe, user_id)
+                await conn.execute("UPDATE users SET saved_recipes = COALESCE(saved_recipes, '') || $1 WHERE user_id = $2", full_recipe, user_id)
                 await conn.close()
                 await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
             else:
                 await context.bot.send_message(chat_id=user_id, text="⭐ Функция сохранения заработает после настройки базы данных!")
-        except:
-            await context.bot.send_message(chat_id=user_id, text="❌ Ошибка сохранения.")
+        except Exception as e:
+            await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка сохранения: {e}")
 
     elif query.data == "replace_btn":
         user_states[user_id] = "replace_ingredient"
