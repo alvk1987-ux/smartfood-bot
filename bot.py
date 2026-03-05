@@ -11,7 +11,10 @@ from openai import AsyncOpenAI
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
 DATABASE_URL = os.getenv("DATABASE_URL") 
-ADMIN_ID = 230764474  # ВАШ ЛИЧНЫЙ ID СОЗДАТЕЛЯ!
+ADMIN_ID = 230764474  
+
+# ВАША ССЫЛКА НА ГРУППУ
+GROUP_LINK = "https://t.me/premium_chef_ru" 
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url="https://api.proxyapi.ru/openai/v1")
@@ -24,7 +27,8 @@ MENU_FREE = [
     ["🔍 Найти рецепт", "🧺 Из того, что есть"],
     ["⚡ Быстрый ужин", "🥗 Рецепты для похудения"],
     ["🛒 Мой список покупок", "📸 Калории по фото"],
-    ["⭐ Сохраненные рецепты", "👑 Моя подписка"]
+    ["⭐ Сохраненные рецепты", "👑 Моя подписка"],
+    ["💬 Наш Чат-Форум"] 
 ]
 
 SYSTEM_PROMPT = """Ты — элитный шеф-повар и профессиональный диетолог. 
@@ -73,17 +77,13 @@ async def init_db():
 async def check_access(user_id):
     if user_id == ADMIN_ID: return True 
     if not DATABASE_URL: return True
-    
     conn = await asyncpg.connect(DATABASE_URL)
     row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
     await conn.close()
-    
     if not row: return True
     if row['has_premium']: return True 
-    
     diff = datetime.datetime.now() - row['created_at']
-    hours_passed = diff.total_seconds() / 3600
-    return hours_passed < 48 
+    return (diff.total_seconds() / 3600) < 48 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -99,16 +99,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
     reply_markup = ReplyKeyboardMarkup(MENU_FREE, resize_keyboard=True)
+    
     await update.message.reply_text(f"👨‍🍳 Добро пожаловать, {user.first_name}!\n\nЯ ваш личный Премиальный Шеф. Что будем готовить?\n\n🎁 <i>Вам начислено 48 часов бесплатного VIP-доступа!</i>", reply_markup=reply_markup, parse_mode="HTML")
+    
+    inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити", url=GROUP_LINK)]]
+    await update.message.reply_text("👇 <b>Обязательно подпишитесь на наш Чат-Форум!</b>\n\nТам мы делимся кулинарными шедеврами, обсуждаем идеи для бота и дарим промокоды на бесплатную подписку! Присоединяйтесь к нашей Кухне 🥗", reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="HTML")
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id != ADMIN_ID: return 
-
     conn = await asyncpg.connect(DATABASE_URL)
     count = await conn.fetchval('SELECT COUNT(*) FROM users')
     await conn.close()
-
     keyboard = [[InlineKeyboardButton("🎁 Выдать VIP-доступ", callback_data="give_premium")]]
     await update.message.reply_text(f"👑 <b>ПАНЕЛЬ ВЛАДЕЛЬЦА</b>\n\n👥 Всего пользователей: <b>{count}</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -117,7 +119,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = user_states.get(user_id, "start")
 
-    # --- ЛОГИКА АДМИНА ---
     if state == "waiting_for_user_id" and user_id == ADMIN_ID:
         try:
             target_id = int(text.strip())
@@ -130,36 +131,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка. Пришлите только цифры ID.")
         return
 
-    # --- ИНФОРМАЦИЯ О ПОДПИСКЕ (РАБОТАЕТ ВСЕГДА) ---
+    if text == "💬 Наш Чат-Форум":
+        inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити Шефа", url=GROUP_LINK)]]
+        await update.message.reply_text(
+            "👨‍🍳 <b>Добро пожаловать на нашу Кухню!</b>\n\n"
+            "У нас есть уютный чат-форум, где мы:\n"
+            "📸 Делимся фотографиями приготовленных блюд\n"
+            "💡 Обсуждаем новые фишки для бота\n"
+            "🎁 Разыгрываем VIP-подписки\n\n"
+            "Присоединяйтесь, там очень вкусно и интересно! 👇", 
+            reply_markup=InlineKeyboardMarkup(inline_kb), 
+            parse_mode="HTML"
+        )
+        return
+
     if text == "👑 Моя подписка":
         if user_id == ADMIN_ID:
             await update.message.reply_text("👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА", parse_mode="HTML")
             return
-            
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
             row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
             await conn.close()
-            
             if row['has_premium']:
                 await update.message.reply_text("👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Навсегда", parse_mode="HTML")
             else:
                 diff = datetime.datetime.now() - row['created_at']
                 hours_passed = diff.total_seconds() / 3600
                 if hours_passed >= 48:
-                    await update.message.reply_text("👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш пробный период завершен.\n\nДоступ к боту, сохраненным рецептам и списку покупок заблокирован. Оформите подписку!", parse_mode="HTML")
+                    await update.message.reply_text("👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш пробный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку!", parse_mode="HTML")
                 else:
                     hours_left = int(48 - hours_passed)
                     await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов", parse_mode="HTML")
         return
 
-    # --- ЖЕСТКАЯ ПРОВЕРКА ДОСТУПА КО ВСЕМ ОСТАЛЬНЫМ ФУНКЦИЯМ ---
     has_access = await check_access(user_id)
     if not has_access:
-        await update.message.reply_text("⏳ <b>Ваш бесплатный период (48 часов) подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей сохраненной базе и списку покупок закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом, перейдите в меню «👑 Моя подписка».", parse_mode="HTML")
+        await update.message.reply_text("⏳ <b>Ваш бесплатный период (48 часов) подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей сохраненной базе и списку покупок закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом, перейдите в меню «👑 Моя подписка».\n\n<i>💬 Либо загляните в наш Чат-Форум (там можно получить скидку)!</i>", parse_mode="HTML")
         return
 
-    # --- ЕСЛИ ДОСТУП ЕСТЬ, БОТ РАБОТАЕТ КАК ОБЫЧНО ---
     if text == "🔍 Найти рецепт":
         user_states[user_id] = "find_recipe"
         await update.message.reply_text("Напишите, какой рецепт вы хотите найти.\n\nНапример: куриный суп, паста карбонара или сырники.")
@@ -180,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "photo_calories"
         await update.message.reply_text("📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ на 100 грамм!")
         return
-    
     elif text == "🛒 Мой список покупок":
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -193,7 +202,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard = [[InlineKeyboardButton("🗑 Очистить список", callback_data="clear_list")]]
                 await update.message.reply_text(f"🛒 Ваш список покупок:\n\n{shop_list}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-
     elif text == "⭐ Сохраненные рецепты":
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -207,10 +215,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"📚 ВАШИ СОХРАНЕННЫЕ РЕЦЕПТЫ:\n{saved}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
     
-    # --- ГЕНЕРАЦИЯ ---
     if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
         await context.bot.send_chat_action(chat_id=user_id, action='typing')
-        
         if state == "replace_ingredient":
             old_recipe = last_recipes.get(user_id, "")
             user_prompt = f"Вот прошлый рецепт:\n{old_recipe}\n\nПользователь просит: {text}. Перепиши рецепт, выполнив эту просьбу, сохранив формат и пересчитав КБЖУ."
@@ -234,18 +240,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await update.message.reply_text(recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
             user_states[user_id] = "start" 
-            
         except Exception as e:
             await update.message.reply_text(f"Ошибка на кухне: {e}")
     else:
         user_states[user_id] = "find_recipe"
         await handle_message(update, context)
 
-# --- АНАЛИЗ ФОТО ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    
-    # ПРОВЕРЯЕМ ДОСТУП ДЛЯ ФОТО
     has_access = await check_access(user_id)
     if not has_access:
         await update.message.reply_text("⏳ <b>Ваш бесплатный период (48 часов) подошел к концу!</b>\n\nФункция распознавания еды по фото заблокирована. Оформите подписку!", parse_mode="HTML")
@@ -281,21 +283,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Не удалось распознать фото. Ошибка: {e}")
 
-# --- ПРОЗРАЧНЫЕ КНОПКИ ---
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     message_text = query.message.text
     await query.answer() 
 
-    # КНОПКА АДМИНА
     if query.data == "give_premium":
         if user_id == ADMIN_ID:
             user_states[user_id] = "waiting_for_user_id"
             await context.bot.send_message(chat_id=user_id, text="👇 <b>Пришлите ID пользователя (только цифры)</b>, которому вы хотите навсегда включить Премиум:", parse_mode="HTML")
         return
 
-    # ПРОВЕРКА ДОСТУПА ДЛЯ ВСЕХ ОСТАЛЬНЫХ КНОПОК
     has_access = await check_access(user_id)
     if not has_access:
         await context.bot.send_message(chat_id=user_id, text="⏳ Ваш бесплатный период завершен. Функция заблокирована 🔒")
