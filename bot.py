@@ -23,7 +23,6 @@ user_states = {}
 last_prompts = {} 
 last_recipes = {} 
 
-# === ОБНОВЛЕННОЕ МЕНЮ С НОВОЙ КНОПКОЙ ===
 MENU_FREE = [
     ["📖 Как общаться с Шефом"],
     ["🔍 Найти рецепт", "🧺 Из того, что есть"],
@@ -121,11 +120,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = user_states.get(user_id, "start")
 
-    # НОВАЯ КНОПКА: Инструкция
     if text == "📖 Как общаться с Шефом":
         await update.message.reply_text(
             "👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\n"
-            "Я — нейро-шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n"
+            "Я — ваш личный профессиональный Шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n"
             "❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n"
             "✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\n"
             "❌ <b>Скучный запрос:</b> <i>омлет</i>\n"
@@ -166,33 +164,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "👑 Моя подписка":
-        # ДОБАВЛЕНЫ РЕКВИЗИТЫ ДЛЯ РОБОКАССЫ
+        pricing_info = "\n\n💎 <b>Условия подписки:</b>\nПервые 48 часов — БЕСПЛАТНО\nДалее — всего 249 рублей в месяц."
         legal_info = "\n\n📝 <b>Официальная информация:</b>\nИП Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
         
         if user_id == ADMIN_ID:
-            await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА{legal_info}", parse_mode="HTML")
+            await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{legal_info}", parse_mode="HTML")
             return
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
             row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
             await conn.close()
             if row['has_premium']:
-                await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Навсегда{legal_info}", parse_mode="HTML")
+                await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Оплачено\n{legal_info}", parse_mode="HTML")
             else:
                 diff = datetime.datetime.now() - row['created_at']
                 hours_passed = diff.total_seconds() / 3600
                 if hours_passed >= 48:
-                    await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш пробный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку!{legal_info}", parse_mode="HTML")
+                    await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку, чтобы продолжить!{pricing_info}{legal_info}", parse_mode="HTML")
                 else:
                     hours_left = int(48 - hours_passed)
-                    await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{legal_info}", parse_mode="HTML")
+                    await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}{legal_info}", parse_mode="HTML")
         else:
-            await update.message.reply_text(f"👑 <b>Тариф:</b> Базовый\n💳 Для оплаты подписки перейдите по ссылке (в разработке).{legal_info}", parse_mode="HTML")
+            await update.message.reply_text(f"👑 <b>Тариф:</b> Базовый\n💳 Для оплаты подписки перейдите по ссылке (в разработке).{pricing_info}{legal_info}", parse_mode="HTML")
         return
 
     has_access = await check_access(user_id)
     if not has_access:
-        await update.message.reply_text("⏳ <b>Ваш бесплатный период (48 часов) подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей сохраненной базе и списку покупок закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом, перейдите в меню «👑 Моя подписка».\n\n<i>💬 Либо загляните в наш Чат-Форум (там можно получить скидку)!</i>", parse_mode="HTML")
+        await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей сохраненной базе и списку покупок закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом (всего 249 руб/мес), перейдите в меню «👑 Моя подписка».", parse_mode="HTML")
         return
 
     if text == "🔍 Найти рецепт":
@@ -279,7 +277,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     has_access = await check_access(user_id)
     if not has_access:
-        await update.message.reply_text("⏳ <b>Ваш бесплатный период (48 часов) подошел к концу!</b>\n\nФункция распознавания еды по фото заблокирована. Оформите подписку!", parse_mode="HTML")
+        await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nФункция распознавания еды по фото заблокирована. Оформите подписку!", parse_mode="HTML")
         return
 
     state = user_states.get(user_id, "start")
