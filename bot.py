@@ -23,7 +23,9 @@ user_states = {}
 last_prompts = {} 
 last_recipes = {} 
 
+# === ОБНОВЛЕННОЕ МЕНЮ С НОВОЙ КНОПКОЙ ===
 MENU_FREE = [
+    ["📖 Как общаться с Шефом"],
     ["🔍 Найти рецепт", "🧺 Из того, что есть"],
     ["⚡ Быстрый ужин", "🥗 Рецепты для похудения"],
     ["🛒 Мой список покупок", "📸 Калории по фото"],
@@ -119,6 +121,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = user_states.get(user_id, "start")
 
+    # НОВАЯ КНОПКА: Инструкция
+    if text == "📖 Как общаться с Шефом":
+        await update.message.reply_text(
+            "👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\n"
+            "Я — нейро-шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n"
+            "❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n"
+            "✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\n"
+            "❌ <b>Скучный запрос:</b> <i>омлет</i>\n"
+            "✅ <b>Ресторанный запрос:</b> <i>французский омлет с трюфельным маслом, шпинатом и сыром бри за 10 минут</i>\n\n"
+            "💡 <b>Лайфхаки от Шефа:</b>\n"
+            "• Указывайте стиль кухни (итальянская, паназиатская).\n"
+            "• Пишите повод (романтический ужин, детский праздник).\n"
+            "• Просите добавить необычные специи или маринад.\n\n"
+            "Жмите «🔍 Найти рецепт» и дайте волю фантазии! 🪄",
+            parse_mode="HTML"
+        )
+        return
+
     if state == "waiting_for_user_id" and user_id == ADMIN_ID:
         try:
             target_id = int(text.strip())
@@ -146,23 +166,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "👑 Моя подписка":
+        # ДОБАВЛЕНЫ РЕКВИЗИТЫ ДЛЯ РОБОКАССЫ
+        legal_info = "\n\n📝 <b>Официальная информация:</b>\nИП Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
+        
         if user_id == ADMIN_ID:
-            await update.message.reply_text("👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА", parse_mode="HTML")
+            await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА{legal_info}", parse_mode="HTML")
             return
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
             row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
             await conn.close()
             if row['has_premium']:
-                await update.message.reply_text("👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Навсегда", parse_mode="HTML")
+                await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Навсегда{legal_info}", parse_mode="HTML")
             else:
                 diff = datetime.datetime.now() - row['created_at']
                 hours_passed = diff.total_seconds() / 3600
                 if hours_passed >= 48:
-                    await update.message.reply_text("👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш пробный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку!", parse_mode="HTML")
+                    await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш пробный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку!{legal_info}", parse_mode="HTML")
                 else:
                     hours_left = int(48 - hours_passed)
-                    await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов", parse_mode="HTML")
+                    await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{legal_info}", parse_mode="HTML")
+        else:
+            await update.message.reply_text(f"👑 <b>Тариф:</b> Базовый\n💳 Для оплаты подписки перейдите по ссылке (в разработке).{legal_info}", parse_mode="HTML")
         return
 
     has_access = await check_access(user_id)
@@ -201,6 +226,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 keyboard = [[InlineKeyboardButton("🗑 Очистить список", callback_data="clear_list")]]
                 await update.message.reply_text(f"🛒 Ваш список покупок:\n\n{shop_list}", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+             await update.message.reply_text("🛒 Ваша корзина пока пуста. (Функция сохранения заработает после подключения базы данных).")
         return
     elif text == "⭐ Сохраненные рецепты":
         if DATABASE_URL:
@@ -213,6 +240,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 keyboard = [[InlineKeyboardButton("🗑 Очистить сохраненное", callback_data="clear_saved")]]
                 await update.message.reply_text(f"📚 ВАШИ СОХРАНЕННЫЕ РЕЦЕПТЫ:\n{saved}", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("⭐ У вас пока нет сохраненных рецептов. (Функция заработает после подключения базы данных).")
         return
     
     if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
@@ -307,7 +336,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn = await asyncpg.connect(DATABASE_URL)
                 await conn.execute("UPDATE users SET shopping_list = shopping_list || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
                 await conn.close()
-            await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
+                await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
+            else:
+                 await context.bot.send_message(chat_id=user_id, text="🛒 Функция сохранения заработает после настройки базы данных!")
         except:
             await context.bot.send_message(chat_id=user_id, text="❌ Ошибка: Не удалось найти ингредиенты.")
 
@@ -318,7 +349,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn = await asyncpg.connect(DATABASE_URL)
                 await conn.execute("UPDATE users SET saved_recipes = saved_recipes || $1 WHERE user_id = $2", full_recipe, user_id)
                 await conn.close()
-            await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
+                await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
+            else:
+                await context.bot.send_message(chat_id=user_id, text="⭐ Функция сохранения заработает после настройки базы данных!")
         except:
             await context.bot.send_message(chat_id=user_id, text="❌ Ошибка сохранения.")
 
