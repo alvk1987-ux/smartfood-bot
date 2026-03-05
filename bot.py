@@ -17,8 +17,9 @@ client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url="https://api.proxyapi.ru/o
 # Оперативная память бота
 user_states = {}
 last_prompts = {} # Память для кнопки "Другой вариант"
+last_recipes = {} # НОВОЕ: Память для кнопки "Заменить продукт"
 
-# === МЕНЮ (Вернули Калории по фото) ===
+# === МЕНЮ ===
 MENU_FREE = [
     ["🔍 Найти рецепт", "🧺 Из того, что есть"],
     ["⚡ Быстрый ужин", "🥗 Рецепты для похудения"],
@@ -84,7 +85,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
     
-    # --- ОБРАБОТКА МЕНЮ С ОБЫЧНЫМ ТЕКСТОМ ПРИМЕРОВ ---
+    # --- ОБРАБОТКА МЕНЮ ---
     if text == "🔍 Найти рецепт":
         user_states[user_id] = "find_recipe"
         await update.message.reply_text("Напишите, какой рецепт вы хотите найти.\n\nНапример: куриный суп, паста карбонара или сырники.")
@@ -106,7 +107,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ на 100 грамм!")
         return
     
-    # --- БАЗА ДАННЫХ: СПИСОК ПОКУПОК ---
+    # --- БАЗА ДАННЫХ ---
     elif text == "🛒 Мой список покупок":
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -120,7 +121,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"🛒 Ваш список покупок:\n\n{shop_list}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # --- БАЗА ДАННЫХ: ПОЛНЫЕ СОХРАНЕННЫЕ РЕЦЕПТЫ ---
     elif text == "⭐ Сохраненные рецепты":
         if DATABASE_URL:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -138,13 +138,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👑 Тариф: Пробный\n⏳ Осталось: 48 часов")
         return
 
-    # --- ГЕНЕРАЦИЯ РЕЦЕПТА ---
+    # --- ГЕНЕРАЦИЯ РЕЦЕПТА (С УЧЕТОМ ЗАМЕНЫ ПРОДУКТА) ---
     state = user_states.get(user_id, "start")
     
-    if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe"]:
+    if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
         await context.bot.send_chat_action(chat_id=user_id, action='typing')
-        user_prompt = f"Запрос: {text}."
-        last_prompts[user_id] = text # Запомнили для кнопки "Другой вариант"
+        
+        # ЛОГИКА ЗАМЕНЫ ИЛИ НОВОГО ЗАПРОСА
+        if state == "replace_ingredient":
+            old_recipe = last_recipes.get(user_id, "")
+            user_prompt = f"Вот прошлый рецепт:\n{old_recipe}\n\nПользователь просит: {text}. Перепиши рецепт, выполнив эту просьбу, сохранив формат и пересчитав КБЖУ."
+        else:
+            user_prompt = f"Запрос: {text}."
+            last_prompts[user_id] = text # Запомнили для кнопки "Другой вариант"
 
         try:
             response = await client.chat.completions.create(
@@ -152,12 +158,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}]
             )
             recipe_text = response.choices[0].message.content
+            last_recipes[user_id] = recipe_text # Запомнили сам рецепт для будущей замены!
             
-            # КНОПКИ ПОД РЕЦЕПТОМ
+            # КНОПКИ ПОД РЕЦЕПТОМ (ВЕРНУЛ КНОПКУ ЗАМЕНЫ!)
             keyboard = [
                 [InlineKeyboardButton("🛒 В список покупок", callback_data="add_to_cart")],
                 [InlineKeyboardButton("⭐ Сохранить рецепт", callback_data="save_recipe")],
-                [InlineKeyboardButton("🔄 Другой вариант", callback_data="another_recipe")]
+                [InlineKeyboardButton("🔄 Заменить продукт", callback_data="replace_btn")],
+                [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")]
             ]
             await update.message.reply_text(recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
             user_states[user_id] = "start" 
@@ -168,7 +176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "find_recipe"
         await handle_message(update, context)
 
-# --- НОВАЯ ФУНКЦИЯ: АНАЛИЗ ФОТО ---
+# --- АНАЛИЗ ФОТО ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     state = user_states.get(user_id, "start")
@@ -181,12 +189,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Анализирую фото... Это займет пару секунд.")
 
     try:
-        # Получаем фото и кодируем в Base64 для передачи в ИИ
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         base64_image = base64.b64encode(photo_bytes).decode('utf-8')
 
-        # Используем специальную модель gpt-4o-mini, которая умеет видеть фото
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -200,7 +206,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
         await update.message.reply_text(response.choices[0].message.content)
-        user_states[user_id] = "start" # Сбрасываем состояние
+        user_states[user_id] = "start" 
     except Exception as e:
         await update.message.reply_text(f"❌ Не удалось распознать фото. Ошибка: {e}")
 
@@ -218,29 +224,33 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn = await asyncpg.connect(DATABASE_URL)
                 await conn.execute("UPDATE users SET shopping_list = shopping_list || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
                 await conn.close()
-            # ОТПРАВЛЯЕМ ОТДЕЛЬНОЕ СООБЩЕНИЕ!
             await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты успешно добавлены в ваш список продуктов!")
         except:
             await context.bot.send_message(chat_id=user_id, text="❌ Ошибка: Не удалось найти ингредиенты в тексте рецепта.")
 
     elif query.data == "save_recipe":
         try:
-            # СОХРАНЯЕМ РЕЦЕПТ ЦЕЛИКОМ + ДОБАВЛЯЕМ ЧЕРТУ ДЛЯ РАЗДЕЛЕНИЯ
             full_recipe = f"\n\n➖➖➖➖➖➖➖➖➖➖\n\n{message_text}"
-            
             if DATABASE_URL:
                 conn = await asyncpg.connect(DATABASE_URL)
                 await conn.execute("UPDATE users SET saved_recipes = saved_recipes || $1 WHERE user_id = $2", full_recipe, user_id)
                 await conn.close()
-            # ОТПРАВЛЯЕМ ОТДЕЛЬНОЕ СООБЩЕНИЕ!
             await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Полный рецепт сохранен в вашей базе! Вы найдете его в меню «Сохраненные рецепты».")
         except:
             await context.bot.send_message(chat_id=user_id, text="❌ Ошибка сохранения рецепта.")
 
+    # ВЕРНУЛИ ЛОГИКУ КНОПКИ "ЗАМЕНИТЬ ПРОДУКТ"
+    elif query.data == "replace_btn":
+        user_states[user_id] = "replace_ingredient"
+        await context.bot.send_message(
+            chat_id=user_id, 
+            text="🔄 <b>Напишите, какой продукт нужно заменить.</b>\n\nНапример: замени сливки на сметану, или убери лук.", 
+            parse_mode="HTML"
+        )
+
     elif query.data == "another_recipe":
         await context.bot.send_message(chat_id=user_id, text="👨‍🍳 Ищу другой вариант... одну секунду!")
         
-        # ДОСТАЕМ ПРОШЛЫЙ ЗАПРОС И ПРОСИМ ДРУГОЙ
         old_prompt = last_prompts.get(user_id, "вкусное блюдо")
         user_prompt = f"Пользователю не понравился прошлый рецепт. Напиши АБСОЛЮТНО ДРУГОЙ рецепт по этому же запросу: {old_prompt}."
 
@@ -250,11 +260,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}]
             )
             recipe_text = response.choices[0].message.content
+            last_recipes[user_id] = recipe_text # Запомнили новый рецепт тоже!
             
             keyboard = [
                 [InlineKeyboardButton("🛒 В список покупок", callback_data="add_to_cart")],
                 [InlineKeyboardButton("⭐ Сохранить рецепт", callback_data="save_recipe")],
-                [InlineKeyboardButton("🔄 Другой вариант", callback_data="another_recipe")]
+                [InlineKeyboardButton("🔄 Заменить продукт", callback_data="replace_btn")],
+                [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")]
             ]
             await context.bot.send_message(chat_id=user_id, text=recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
@@ -281,10 +293,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # НОВЫЙ ОБРАБОТЧИК ДЛЯ ФОТОГРАФИЙ
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
     app.add_handler(CallbackQueryHandler(button_click))
     app.run_polling()
 
