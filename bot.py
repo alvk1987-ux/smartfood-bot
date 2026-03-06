@@ -27,6 +27,7 @@ ROBOKASSA_PASS_2 = "l1ONgktiTu3kocNc94v1"
 ROBOKASSA_TEST_PASS_1 = "nl9Blk5uVX35zO3xaeoE"
 ROBOKASSA_TEST_PASS_2 = "Taf1jpWp2Jr1w4eMz3sC"
 
+# БОЕВОЙ РЕЖИМ ВКЛЮЧЕН (False)
 IS_TEST_MODE = False  
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -36,13 +37,14 @@ user_states = {}
 last_prompts = {} 
 last_recipes = {} 
 
+# ДОБАВЛЕНА КНОПКА ПРАВОВОЙ ИНФОРМАЦИИ ДЛЯ РОБОКАССЫ
 MENU_FREE = [
     ["📖 Как общаться с Шефом"],
     ["🔍 Найти рецепт", "🧺 Из того, что есть"],
     ["⚡ Быстрый ужин", "🥗 Рецепты для похудения"],
     ["🛒 Мой список покупок", "📸 Калории по фото"],
     ["⭐ Сохраненные рецепты", "👑 Моя подписка"],
-    ["💬 Наш Чат-Форум"] 
+    ["💬 Наш Чат-Форум", "📜 Правовая информация"] 
 ]
 
 SYSTEM_PROMPT = """Ты — элитный шеф-повар и профессиональный диетолог. 
@@ -159,7 +161,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити", url=GROUP_LINK)]]
     await update.message.reply_text("👇 <b>Обязательно подпишитесь на наш Чат-Форум!</b>\n\nТам мы делимся кулинарными шедеврами, обсуждаем идеи для бота и дарим промокоды на бесплатную подписку! Присоединяйтесь к нашей Кухне 🥗", reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="HTML")
 
-# --- НОВАЯ КРУТАЯ ПАНЕЛЬ АДМИНА ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id != ADMIN_ID: return 
@@ -185,11 +186,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = user_states.get(user_id, "start")
 
+    # --- ТЕКСТ ДЛЯ РОБОКАССЫ ---
+    if text == "📜 Правовая информация":
+        legal_text = (
+            "📝 <b>Юридическая и контактная информация</b>\n"
+            "• Самозанятый: Ширякин Олег Юрьевич\n"
+            "• ИНН: 732705248482\n"
+            "• Контакты (техподдержка): al.smm-manager@yandex.ru\n\n"
+            "📦 <b>Заказ, Оплата и Оказание услуг</b>\n"
+            "• Заказ: оформляется в меню бота нажатием кнопки «Оплатить VIP». Сроки исполнения — мгновенно.\n"
+            "• Оплата: банковскими картами или по СБП через защищенное соединение сервиса Robokassa.\n"
+            "• Оказание услуг: услуга предоставляется в цифровом виде. VIP-доступ к функционалу бота активируется автоматически сразу после успешной оплаты.\n\n"
+            "🔄 <b>Политика возврата средств</b>\n"
+            "• Покупатель вправе отказаться от услуги.\n"
+            "• <b>Алгоритм возврата:</b> для возврата средств необходимо направить письменное обращение в свободной форме на email: al.smm-manager@yandex.ru.\n"
+            "• Срок рассмотрения заявки — до 3 рабочих дней.\n"
+            "• Возврат производится в полном объеме. Возврат производится БЕЗ вычета комиссии платежного сервиса или банка. Денежные средства возвращаются на ту же карту, с которой была произведена оплата, в течение 3-10 рабочих дней.\n\n"
+            "🔐 <b>Политика обработки персональных данных</b>\n"
+            "• Бот собирает только публичный ID пользователя в Telegram для идентификации подписки. Мы не запрашиваем и не храним платежные данные (они обрабатываются исключительно на стороне Робокассы)."
+        )
+        await update.message.reply_text(legal_text, parse_mode="HTML")
+        return
+
     if text == "📖 Как общаться с Шефом":
         await update.message.reply_text("👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\nЯ — ваш личный профессиональный Шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\nЖмите «🔍 Найти рецепт» и дайте волю фантазии! 🪄", parse_mode="HTML")
         return
 
-    # Логика выдачи VIP
     if state == "waiting_for_user_id" and user_id == ADMIN_ID:
         try:
             target_id = int(text.strip())
@@ -202,7 +224,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка. Пришлите только цифры ID.")
         return
 
-    # Логика УДАЛЕНИЯ пользователя
     if state == "waiting_for_delete_id" and user_id == ADMIN_ID:
         try:
             target_id = int(text.strip())
@@ -210,11 +231,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Вы не можете удалить сами себя!")
                 user_states[user_id] = "start"
                 return
-                
             conn = await asyncpg.connect(DATABASE_URL)
             deleted = await conn.execute("DELETE FROM users WHERE user_id = $1", target_id)
             await conn.close()
-            
             if deleted == "DELETE 0":
                 await update.message.reply_text("⚠️ Пользователь с таким ID не найден в базе.")
             else:
@@ -231,25 +250,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "👑 Моя подписка":
         pricing_info = "\n\n💎 <b>Условия подписки:</b>\nПервые 48 часов — БЕСПЛАТНО\nДалее — всего 249 рублей в месяц."
-        legal_info = "\n\n📝 <b>Официальная информация:</b>\nСамозанятый Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
         if user_id == ADMIN_ID:
-            await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{legal_info}", parse_mode="HTML")
+            await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{pricing_info}", parse_mode="HTML")
             return
         conn = await asyncpg.connect(DATABASE_URL)
         row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
         await conn.close()
         if row and row['has_premium']:
-            await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Доступ\n⏳ <b>Осталось:</b> Оплачено ✅\n{legal_info}", parse_mode="HTML")
+            await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Доступ\n⏳ <b>Осталось:</b> Оплачено ✅\n{pricing_info}", parse_mode="HTML")
         else:
             payment_url = get_payment_link(user_id)
             pay_keyboard = [[InlineKeyboardButton("💎 Оплатить VIP (249 руб)", url=payment_url)]]
             diff = datetime.datetime.now() - row['created_at']
             hours_passed = diff.total_seconds() / 3600
             if hours_passed >= 48:
-                await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nОформите подписку, чтобы продолжить!{pricing_info}{legal_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
+                await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nОформите подписку, чтобы продолжить!{pricing_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
             else:
                 hours_left = int(48 - hours_passed)
-                await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}{legal_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
+                await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
         return
 
     has_access = await check_access(user_id)
