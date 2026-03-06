@@ -4,18 +4,35 @@ import asyncpg
 import base64
 import datetime
 import re
+import time
+import hashlib
+import urllib.parse
+import asyncio
+from aiohttp import web
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from openai import AsyncOpenAI
 
-# === НАСТРОЙКИ ===
+# === НАСТРОЙКИ ТЕЛЕГРАМ И БД ===
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
 DATABASE_URL = "postgresql://botuser:botpass123@127.0.0.1/botdb" 
 ADMIN_ID = 230764474  
-
-# ВАША ССЫЛКА НА ГРУППУ
 GROUP_LINK = "https://t.me/premium_chef_ru" 
+
+# === НАСТРОЙКИ РОБОКАССЫ ===
+ROBOKASSA_SHOP_ID = "chefpremium"
+
+# Ваши РАБОЧИЕ пароли (пока лежат тут, бот их не трогает)
+ROBOKASSA_PASS_1 = "K70v46d5sgUEuupTKbMw"
+ROBOKASSA_PASS_2 = "l1ONgktiTu3kocNc94v1"
+
+# Ваши ТЕСТОВЫЕ пароли (Бот использует их сейчас для проверки)
+ROBOKASSA_TEST_PASS_1 = "nl9Blk5uVX35zO3xaeoE"
+ROBOKASSA_TEST_PASS_2 = "Taf1jpWp2Jr1w4eMz3sC"
+
+# РЕЖИМ ТЕСТИРОВАНИЯ (Когда проверим, поменяем на False)
+IS_TEST_MODE = True  
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url="https://api.proxyapi.ru/openai/v1")
@@ -56,6 +73,7 @@ SYSTEM_PROMPT = """Ты — элитный шеф-повар и професси
 1. [Шаг 1]
 2. [Шаг 2]"""
 
+# --- ФУНКЦИИ БАЗЫ ДАННЫХ ---
 async def init_db():
     if not DATABASE_URL: return
     try:
@@ -87,6 +105,68 @@ async def check_access(user_id):
     diff = datetime.datetime.now() - row['created_at']
     return (diff.total_seconds() / 3600) < 48 
 
+# --- ФУНКЦИИ РОБОКАССЫ ---
+def get_payment_link(user_id):
+    amount = "249.00" 
+    inv_id = int(time.time()) % 100000000 # Уникальный номер заказа
+    description = "VIP Подписка на Premium Шеф"
+    
+    pass1 = ROBOKASSA_TEST_PASS_1 if IS_TEST_MODE else ROBOKASSA_PASS_1
+    
+    # Формируем подпись для защиты
+    signature_str = f"{ROBOKASSA_SHOP_ID}:{amount}:{inv_id}:{pass1}:Shp_chatId={user_id}"
+    hash_md5 = hashlib.md5(signature_str.encode()).hexdigest()
+    
+    desc_encoded = urllib.parse.quote(description)
+    
+    url = (f"https://auth.robokassa.ru/Merchant/Index.aspx?"
+           f"MerchantLogin={ROBOKASSA_SHOP_ID}&"
+           f"OutSum={amount}&"
+           f"InvId={inv_id}&"
+           f"Description={desc_encoded}&"
+           f"SignatureValue={hash_md5}&"
+           f"Shp_chatId={user_id}")
+           
+    if IS_TEST_MODE:
+        url += "&IsTest=1"
+        
+    return url
+
+async def robokassa_handler(request):
+    data = await request.post()
+    out_sum = data.get("OutSum", "0")
+    inv_id = data.get("InvId", "0")
+    signature = data.get("SignatureValue", "")
+    user_id = data.get("Shp_chatId")
+    
+    pass2 = ROBOKASSA_TEST_PASS_2 if IS_TEST_MODE else ROBOKASSA_PASS_2
+    
+    # Проверяем, от Робокассы ли пришел запрос
+    my_sig = f"{out_sum}:{inv_id}:{pass2}:Shp_chatId={user_id}"
+    my_hash = hashlib.md5(my_sig.encode()).hexdigest().upper()
+    
+    if my_hash == signature.upper():
+        if DATABASE_URL and user_id:
+            conn = await asyncpg.connect(DATABASE_URL)
+            await conn.execute("UPDATE users SET has_premium = TRUE WHERE user_id = $1", int(user_id))
+            await conn.close()
+        
+        # Отправляем радостное сообщение клиенту
+        bot = request.app['bot']
+        try:
+            await bot.send_message(
+                chat_id=int(user_id), 
+                text="🎉 <b>Оплата успешно получена!</b>\n\nВам активирован VIP-доступ. Приятного пользования Шефом!",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.error(f"Не удалось отправить: {e}")
+            
+        return web.Response(text=f"OK{inv_id}")
+    else:
+        return web.Response(text="BAD SIGNATURE", status=400)
+
+# --- ОСНОВНЫЕ ФУНКЦИИ БОТА ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_states[user.id] = "start"
@@ -122,20 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = user_states.get(user_id, "start")
 
     if text == "📖 Как общаться с Шефом":
-        await update.message.reply_text(
-            "👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\n"
-            "Я — ваш личный профессиональный Шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n"
-            "❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n"
-            "✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\n"
-            "❌ <b>Скучный запрос:</b> <i>омлет</i>\n"
-            "✅ <b>Ресторанный запрос:</b> <i>французский омлет с трюфельным маслом, шпинатом и сыром бри за 10 минут</i>\n\n"
-            "💡 <b>Лайфхаки от Шефа:</b>\n"
-            "• Указывайте стиль кухни (итальянская, паназиатская).\n"
-            "• Пишите повод (романтический ужин, детский праздник).\n"
-            "• Просите добавить необычные специи или маринад.\n\n"
-            "Жмите «🔍 Найти рецепт» и дайте волю фантазии! 🪄",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\nЯ — ваш личный профессиональный Шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\nЖмите «🔍 Найти рецепт» и дайте волю фантазии! 🪄", parse_mode="HTML")
         return
 
     if state == "waiting_for_user_id" and user_id == ADMIN_ID:
@@ -152,112 +219,100 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💬 Наш Чат-Форум":
         inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити Шефа", url=GROUP_LINK)]]
-        await update.message.reply_text(
-            "👨‍🍳 <b>Добро пожаловать на нашу Кухню!</b>\n\n"
-            "У нас есть уютный чат-форум, где мы:\n"
-            "📸 Делимся фотографиями приготовленных блюд\n"
-            "💡 Обсуждаем новые фишки для бота\n"
-            "🎁 Разыгрываем VIP-подписки\n\n"
-            "Присоединяйтесь, там очень вкусно и интересно! 👇", 
-            reply_markup=InlineKeyboardMarkup(inline_kb), 
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("👨‍🍳 <b>Добро пожаловать на нашу Кухню!</b>\n\nПрисоединяйтесь, там очень вкусно и интересно! 👇", reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="HTML")
         return
 
+    # --- КНОПКА ПОДПИСКИ С КАССОЙ ---
     if text == "👑 Моя подписка":
         pricing_info = "\n\n💎 <b>Условия подписки:</b>\nПервые 48 часов — БЕСПЛАТНО\nДалее — всего 249 рублей в месяц."
-        legal_info = "\n\n📝 <b>Официальная информация:</b>\nИП Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
+        legal_info = "\n\n📝 <b>Официальная информация:</b>\nСамозанятый Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
         
         if user_id == ADMIN_ID:
             await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{legal_info}", parse_mode="HTML")
             return
-        if DATABASE_URL:
-            conn = await asyncpg.connect(DATABASE_URL)
-            row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
-            await conn.close()
-            if row['has_premium']:
-                await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Безлимит\n⏳ <b>Осталось:</b> Оплачено\n{legal_info}", parse_mode="HTML")
-            else:
-                diff = datetime.datetime.now() - row['created_at']
-                hours_passed = diff.total_seconds() / 3600
-                if hours_passed >= 48:
-                    await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nДоступ к боту заблокирован. Оформите подписку, чтобы продолжить!{pricing_info}{legal_info}", parse_mode="HTML")
-                else:
-                    hours_left = int(48 - hours_passed)
-                    await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}{legal_info}", parse_mode="HTML")
+            
+        conn = await asyncpg.connect(DATABASE_URL)
+        row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
+        await conn.close()
+        
+        if row and row['has_premium']:
+            await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Доступ\n⏳ <b>Осталось:</b> Оплачено ✅\n{legal_info}", parse_mode="HTML")
         else:
-            await update.message.reply_text(f"👑 <b>Тариф:</b> Базовый\n💳 Для оплаты подписки перейдите по ссылке (в разработке).{pricing_info}{legal_info}", parse_mode="HTML")
+            payment_url = get_payment_link(user_id)
+            pay_keyboard = [[InlineKeyboardButton("💎 Оплатить VIP (249 руб)", url=payment_url)]]
+            
+            diff = datetime.datetime.now() - row['created_at']
+            hours_passed = diff.total_seconds() / 3600
+            
+            if hours_passed >= 48:
+                await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nОформите подписку, чтобы продолжить!{pricing_info}{legal_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
+            else:
+                hours_left = int(48 - hours_passed)
+                await update.message.reply_text(f"👑 <b>Тариф:</b> Пробный VIP\n⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}{legal_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
         return
 
     has_access = await check_access(user_id)
     if not has_access:
-        await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей сохраненной базе и списку покупок закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом (всего 249 руб/мес), перейдите в меню «👑 Моя подписка».", parse_mode="HTML")
+        await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей базе и списку закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом, перейдите в меню «👑 Моя подписка».", parse_mode="HTML")
         return
 
+    # Логика меню генерации
     if text == "🔍 Найти рецепт":
         user_states[user_id] = "find_recipe"
-        await update.message.reply_text("Напишите, какой рецепт вы хотите найти.\n\nНапример: куриный суп, паста карбонара или сырники.")
+        await update.message.reply_text("Напишите, какой рецепт вы хотите найти.")
         return
     elif text == "🧺 Из того, что есть":
         user_states[user_id] = "from_fridge"
-        await update.message.reply_text("Напишите продукты, которые у вас есть (через запятую).\n\nНапример: курица, картошка, сыр, чеснок.")
+        await update.message.reply_text("Напишите продукты, которые у вас есть (через запятую).")
         return
     elif text == "⚡ Быстрый ужин":
         user_states[user_id] = "quick_dinner"
-        await update.message.reply_text("Напишите главный продукт для быстрого ужина.\n\nНапример: фарш, филе или грибы.")
+        await update.message.reply_text("Напишите главный продукт для быстрого ужина.")
         return
     elif text == "🥗 Рецепты для похудения":
         user_states[user_id] = "diet_recipe"
-        await update.message.reply_text("Какой лёгкий рецепт вы хотите?\n\nНапример: белковый ужин до 300 ккал или салат с тунцом.")
+        await update.message.reply_text("Какой лёгкий рецепт вы хотите?")
         return
     elif text == "📸 Калории по фото":
         user_states[user_id] = "photo_calories"
-        await update.message.reply_text("📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ на 100 грамм!")
+        await update.message.reply_text("📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ!")
         return
     elif text == "🛒 Мой список покупок":
-        if DATABASE_URL:
-            conn = await asyncpg.connect(DATABASE_URL)
-            row = await conn.fetchrow('SELECT shopping_list FROM users WHERE user_id = $1', user_id)
-            await conn.close()
-            shop_list = row['shopping_list'] if row and row['shopping_list'] else ""
-            if not shop_list.strip():
-                await update.message.reply_text("🛒 Ваша корзина пуста.")
-            else:
-                keyboard = [[InlineKeyboardButton("🗑 Очистить список", callback_data="clear_list")]]
-                await update.message.reply_text(f"🛒 Ваш список покупок:\n\n{shop_list}", reply_markup=InlineKeyboardMarkup(keyboard))
+        conn = await asyncpg.connect(DATABASE_URL)
+        row = await conn.fetchrow('SELECT shopping_list FROM users WHERE user_id = $1', user_id)
+        await conn.close()
+        shop_list = row['shopping_list'] if row and row['shopping_list'] else ""
+        if not shop_list.strip():
+            await update.message.reply_text("🛒 Ваша корзина пуста.")
         else:
-             await update.message.reply_text("🛒 Ваша корзина пока пуста. (Функция сохранения заработает после подключения базы данных).")
+            keyboard = [[InlineKeyboardButton("🗑 Очистить список", callback_data="clear_list")]]
+            await update.message.reply_text(f"🛒 Ваш список покупок:\n\n{shop_list}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
     elif text == "⭐ Сохраненные рецепты":
-        if DATABASE_URL:
-            conn = await asyncpg.connect(DATABASE_URL)
-            row = await conn.fetchrow('SELECT saved_recipes FROM users WHERE user_id = $1', user_id)
-            await conn.close()
-            saved = row['saved_recipes'] if row and row['saved_recipes'] else ""
-            if not saved.strip():
-                await update.message.reply_text("⭐ У вас пока нет сохраненных рецептов.")
-            else:
-                keyboard = [[InlineKeyboardButton("🗑 Очистить сохраненное", callback_data="clear_saved")]]
-                await update.message.reply_text(f"📚 ВАШИ СОХРАНЕННЫЕ РЕЦЕПТЫ:\n{saved}", reply_markup=InlineKeyboardMarkup(keyboard))
+        conn = await asyncpg.connect(DATABASE_URL)
+        row = await conn.fetchrow('SELECT saved_recipes FROM users WHERE user_id = $1', user_id)
+        await conn.close()
+        saved = row['saved_recipes'] if row and row['saved_recipes'] else ""
+        if not saved.strip():
+            await update.message.reply_text("⭐ У вас пока нет сохраненных рецептов.")
         else:
-            await update.message.reply_text("⭐ У вас пока нет сохраненных рецептов. (Функция заработает после подключения базы данных).")
+            keyboard = [[InlineKeyboardButton("🗑 Очистить сохраненное", callback_data="clear_saved")]]
+            await update.message.reply_text(f"📚 ВАШИ СОХРАНЕННЫЕ РЕЦЕПТЫ:\n{saved}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
     
     if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
         await context.bot.send_chat_action(chat_id=user_id, action='typing')
-        
-        # ДЕЛАЕМ БОТА УМНЫМ (он запоминает контекст кнопки)
         if state == "replace_ingredient":
             old_recipe = last_recipes.get(user_id, "")
-            user_prompt = f"Вот прошлый рецепт:\n{old_recipe}\n\nПользователь просит: {text}. Перепиши рецепт, выполнив эту просьбу, сохранив формат и пересчитав КБЖУ."
+            user_prompt = f"Вот прошлый рецепт:\n{old_recipe}\n\nПользователь просит: {text}. Перепиши рецепт, выполнив эту просьбу."
         elif state == "from_fridge":
-            user_prompt = f"Сделай рецепт строго из этих продуктов (или части из них): {text}."
+            user_prompt = f"Сделай рецепт строго из этих продуктов (или части): {text}."
             last_prompts[user_id] = text
         elif state == "quick_dinner":
             user_prompt = f"Сделай очень БЫСТРЫЙ рецепт (до 20 минут), главное: {text}."
             last_prompts[user_id] = text
         elif state == "diet_recipe":
-            user_prompt = f"Сделай низкокалорийный ДИЕТИЧЕСКИЙ рецепт для похудения, главное: {text}."
+            user_prompt = f"Сделай низкокалорийный ДИЕТИЧЕСКИЙ рецепт, главное: {text}."
             last_prompts[user_id] = text
         else:
             user_prompt = f"Запрос: {text}."
@@ -270,7 +325,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             recipe_text = response.choices[0].message.content
             last_recipes[user_id] = recipe_text 
-            
             keyboard = [
                 [InlineKeyboardButton("🛒 В список покупок", callback_data="add_to_cart")],
                 [InlineKeyboardButton("⭐ Сохранить рецепт", callback_data="save_recipe")],
@@ -289,17 +343,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     has_access = await check_access(user_id)
     if not has_access:
-        await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nФункция распознавания еды по фото заблокирована. Оформите подписку!", parse_mode="HTML")
+        await update.message.reply_text("⏳ Ваш бесплатный период подошел к концу! Оформите подписку.")
         return
-
     state = user_states.get(user_id, "start")
     if state != "photo_calories":
-        await update.message.reply_text("Если хотите узнать калории, сначала нажмите кнопку «📸 Калории по фото» в меню!")
+        await update.message.reply_text("Если хотите узнать калории, сначала нажмите кнопку «📸 Калории по фото»!")
         return
 
     await context.bot.send_chat_action(chat_id=user_id, action='typing')
     await update.message.reply_text("🔍 Анализирую фото... Это займет пару секунд.")
-
     try:
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
@@ -307,20 +359,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Определи, что за еда на фото, и напиши примерное КБЖУ на 100 грамм в формате:\n🍽 Блюдо: ...\n🔥 Калории: ...\n🥩 Белки: ...\n🥑 Жиры: ...\n🌾 Углеводы: ..."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                }
-            ]
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": "Определи еду на фото и напиши примерное КБЖУ на 100 грамм в формате:\n🍽 Блюдо: ...\n🔥 Калории: ...\n🥩 Белки: ...\n🥑 Жиры: ...\n🌾 Углеводы: ..."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]}]
         )
         await update.message.reply_text(response.choices[0].message.content)
         user_states[user_id] = "start" 
     except Exception as e:
-        await update.message.reply_text(f"❌ Не удалось распознать фото. Ошибка: {e}")
+        await update.message.reply_text("❌ Не удалось распознать фото.")
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -331,7 +378,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "give_premium":
         if user_id == ADMIN_ID:
             user_states[user_id] = "waiting_for_user_id"
-            await context.bot.send_message(chat_id=user_id, text="👇 <b>Пришлите ID пользователя (только цифры)</b>, которому вы хотите навсегда включить Премиум:", parse_mode="HTML")
+            await context.bot.send_message(chat_id=user_id, text="👇 <b>Пришлите ID пользователя (только цифры):</b>", parse_mode="HTML")
         return
 
     has_access = await check_access(user_id)
@@ -341,45 +388,31 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "add_to_cart":
         try:
-            # Умный поиск текста через Регулярные Выражения
             match = re.search(r'(?i)Ингредиенты:(.*?)(?:Приготовление:|$)', message_text, re.DOTALL)
-            if match:
-                ingredients = match.group(1).strip()
-            else:
-                ingredients = message_text # Если формат совсем сбился, сохраняем всё
-
-            if DATABASE_URL:
-                conn = await asyncpg.connect(DATABASE_URL)
-                # COALESCE защищает от ошибок "пустой строки" в базе
-                await conn.execute("UPDATE users SET shopping_list = COALESCE(shopping_list, '') || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
-                await conn.close()
-                await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
-            else:
-                 await context.bot.send_message(chat_id=user_id, text="🛒 Функция сохранения заработает после настройки базы данных!")
-        except Exception as e:
-            await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка добавления: {e}")
+            ingredients = match.group(1).strip() if match else message_text 
+            conn = await asyncpg.connect(DATABASE_URL)
+            await conn.execute("UPDATE users SET shopping_list = COALESCE(shopping_list, '') || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
+            await conn.close()
+            await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
+        except Exception as e: pass
 
     elif query.data == "save_recipe":
         try:
             full_recipe = f"\n\n➖➖➖➖➖➖➖➖➖➖\n\n{message_text}"
-            if DATABASE_URL:
-                conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute("UPDATE users SET saved_recipes = COALESCE(saved_recipes, '') || $1 WHERE user_id = $2", full_recipe, user_id)
-                await conn.close()
-                await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
-            else:
-                await context.bot.send_message(chat_id=user_id, text="⭐ Функция сохранения заработает после настройки базы данных!")
-        except Exception as e:
-            await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка сохранения: {e}")
+            conn = await asyncpg.connect(DATABASE_URL)
+            await conn.execute("UPDATE users SET saved_recipes = COALESCE(saved_recipes, '') || $1 WHERE user_id = $2", full_recipe, user_id)
+            await conn.close()
+            await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
+        except Exception as e: pass
 
     elif query.data == "replace_btn":
         user_states[user_id] = "replace_ingredient"
         await context.bot.send_message(chat_id=user_id, text="🔄 <b>Напишите, какой продукт нужно заменить.</b>", parse_mode="HTML")
 
     elif query.data == "another_recipe":
-        await context.bot.send_message(chat_id=user_id, text="👨‍🍳 Ищу другой вариант... одну секунду!")
+        await context.bot.send_message(chat_id=user_id, text="👨‍🍳 Ищу другой вариант...")
         old_prompt = last_prompts.get(user_id, "вкусное блюдо")
-        user_prompt = f"Пользователю не понравился прошлый рецепт. Напиши АБСОЛЮТНО ДРУГОЙ рецепт по этому же запросу: {old_prompt}."
+        user_prompt = f"Напиши АБСОЛЮТНО ДРУГОЙ рецепт по этому же запросу: {old_prompt}."
         try:
             response = await client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -394,36 +427,49 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")]
             ]
             await context.bot.send_message(chat_id=user_id, text=recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-             await context.bot.send_message(chat_id=user_id, text=f"Ошибка: {e}")
+        except Exception as e: pass
 
     elif query.data == "clear_list":
-        if DATABASE_URL:
-            conn = await asyncpg.connect(DATABASE_URL)
-            await conn.execute("UPDATE users SET shopping_list = '' WHERE user_id = $1", user_id)
-            await conn.close()
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("UPDATE users SET shopping_list = '' WHERE user_id = $1", user_id)
+        await conn.close()
         await query.edit_message_text("🛒 Список продуктов очищен!")
 
     elif query.data == "clear_saved":
-        if DATABASE_URL:
-            conn = await asyncpg.connect(DATABASE_URL)
-            await conn.execute("UPDATE users SET saved_recipes = '' WHERE user_id = $1", user_id)
-            await conn.close()
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("UPDATE users SET saved_recipes = '' WHERE user_id = $1", user_id)
+        await conn.close()
         await query.edit_message_text("🗑 Ваша база рецептов очищена!")
 
-def main():
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
+async def main():
+    await init_db()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel)) 
-    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_click))
-    app.run_polling()
+    
+    # Запускаем веб-сервер для Робокассы на порту 8080
+    web_app = web.Application()
+    web_app.router.add_post('/robokassa', robokassa_handler)
+    web_app['bot'] = app.bot
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    logging.info("🌍 Сервер оплат Робокассы успешно запущен на порту 8080!")
+
+    # Запускаем бота
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        logging.info("🤖 Бот успешно запущен!")
+        
+        # Заставляем код работать вечно
+        stop_event = asyncio.Event()
+        await stop_event.wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
