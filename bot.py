@@ -22,16 +22,11 @@ GROUP_LINK = "https://t.me/premium_chef_ru"
 
 # === НАСТРОЙКИ РОБОКАССЫ ===
 ROBOKASSA_SHOP_ID = "chefpremium"
-
-# Ваши РАБОЧИЕ пароли (пока лежат тут, бот их не трогает)
 ROBOKASSA_PASS_1 = "K70v46d5sgUEuupTKbMw"
 ROBOKASSA_PASS_2 = "l1ONgktiTu3kocNc94v1"
-
-# Ваши ТЕСТОВЫЕ пароли (Бот использует их сейчас для проверки)
 ROBOKASSA_TEST_PASS_1 = "nl9Blk5uVX35zO3xaeoE"
 ROBOKASSA_TEST_PASS_2 = "Taf1jpWp2Jr1w4eMz3sC"
 
-# РЕЖИМ ТЕСТИРОВАНИЯ (Когда проверим, поменяем на False)
 IS_TEST_MODE = True  
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -73,7 +68,6 @@ SYSTEM_PROMPT = """Ты — элитный шеф-повар и професси
 1. [Шаг 1]
 2. [Шаг 2]"""
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ ---
 async def init_db():
     if not DATABASE_URL: return
     try:
@@ -105,31 +99,18 @@ async def check_access(user_id):
     diff = datetime.datetime.now() - row['created_at']
     return (diff.total_seconds() / 3600) < 48 
 
-# --- ФУНКЦИИ РОБОКАССЫ ---
 def get_payment_link(user_id):
     amount = "249.00" 
-    inv_id = int(time.time()) % 100000000 # Уникальный номер заказа
+    inv_id = int(time.time()) % 100000000
     description = "VIP Подписка на Premium Шеф"
-    
     pass1 = ROBOKASSA_TEST_PASS_1 if IS_TEST_MODE else ROBOKASSA_PASS_1
-    
-    # Формируем подпись для защиты
     signature_str = f"{ROBOKASSA_SHOP_ID}:{amount}:{inv_id}:{pass1}:Shp_chatId={user_id}"
     hash_md5 = hashlib.md5(signature_str.encode()).hexdigest()
-    
     desc_encoded = urllib.parse.quote(description)
-    
     url = (f"https://auth.robokassa.ru/Merchant/Index.aspx?"
-           f"MerchantLogin={ROBOKASSA_SHOP_ID}&"
-           f"OutSum={amount}&"
-           f"InvId={inv_id}&"
-           f"Description={desc_encoded}&"
-           f"SignatureValue={hash_md5}&"
-           f"Shp_chatId={user_id}")
-           
-    if IS_TEST_MODE:
-        url += "&IsTest=1"
-        
+           f"MerchantLogin={ROBOKASSA_SHOP_ID}&OutSum={amount}&InvId={inv_id}&"
+           f"Description={desc_encoded}&SignatureValue={hash_md5}&Shp_chatId={user_id}")
+    if IS_TEST_MODE: url += "&IsTest=1"
     return url
 
 async def robokassa_handler(request):
@@ -138,10 +119,8 @@ async def robokassa_handler(request):
     inv_id = data.get("InvId", "0")
     signature = data.get("SignatureValue", "")
     user_id = data.get("Shp_chatId")
-    
     pass2 = ROBOKASSA_TEST_PASS_2 if IS_TEST_MODE else ROBOKASSA_PASS_2
     
-    # Проверяем, от Робокассы ли пришел запрос
     my_sig = f"{out_sum}:{inv_id}:{pass2}:Shp_chatId={user_id}"
     my_hash = hashlib.md5(my_sig.encode()).hexdigest().upper()
     
@@ -151,7 +130,6 @@ async def robokassa_handler(request):
             await conn.execute("UPDATE users SET has_premium = TRUE WHERE user_id = $1", int(user_id))
             await conn.close()
         
-        # Отправляем радостное сообщение клиенту
         bot = request.app['bot']
         try:
             await bot.send_message(
@@ -161,16 +139,13 @@ async def robokassa_handler(request):
             )
         except Exception as e:
             logging.error(f"Не удалось отправить: {e}")
-            
         return web.Response(text=f"OK{inv_id}")
     else:
         return web.Response(text="BAD SIGNATURE", status=400)
 
-# --- ОСНОВНЫЕ ФУНКЦИИ БОТА ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_states[user.id] = "start"
-    
     if DATABASE_URL:
         try:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -179,22 +154,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                user.id, user.username)
             await conn.close()
         except: pass
-
     reply_markup = ReplyKeyboardMarkup(MENU_FREE, resize_keyboard=True)
-    
     await update.message.reply_text(f"👨‍🍳 Добро пожаловать, {user.first_name}!\n\nЯ ваш личный Премиальный Шеф. Что будем готовить?\n\n🎁 <i>Вам начислено 48 часов бесплатного VIP-доступа!</i>", reply_markup=reply_markup, parse_mode="HTML")
-    
     inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити", url=GROUP_LINK)]]
     await update.message.reply_text("👇 <b>Обязательно подпишитесь на наш Чат-Форум!</b>\n\nТам мы делимся кулинарными шедеврами, обсуждаем идеи для бота и дарим промокоды на бесплатную подписку! Присоединяйтесь к нашей Кухне 🥗", reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="HTML")
 
+# --- НОВАЯ КРУТАЯ ПАНЕЛЬ АДМИНА ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id != ADMIN_ID: return 
     conn = await asyncpg.connect(DATABASE_URL)
-    count = await conn.fetchval('SELECT COUNT(*) FROM users')
+    total_users = await conn.fetchval('SELECT COUNT(*) FROM users')
+    vip_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE has_premium = TRUE')
     await conn.close()
-    keyboard = [[InlineKeyboardButton("🎁 Выдать VIP-доступ", callback_data="give_premium")]]
-    await update.message.reply_text(f"👑 <b>ПАНЕЛЬ ВЛАДЕЛЬЦА</b>\n\n👥 Всего пользователей: <b>{count}</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    
+    keyboard = [
+        [InlineKeyboardButton("🎁 Выдать VIP", callback_data="give_premium")],
+        [InlineKeyboardButton("🗑 Удалить пользователя", callback_data="delete_user")]
+    ]
+    await update.message.reply_text(
+        f"👑 <b>ПАНЕЛЬ ВЛАДЕЛЬЦА</b>\n\n"
+        f"👥 Всего пользователей: <b>{total_users}</b>\n"
+        f"💎 Купили VIP: <b>{vip_users}</b>", 
+        reply_markup=InlineKeyboardMarkup(keyboard), 
+        parse_mode="HTML"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -205,6 +189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👨‍🍳 <b>Секрет идеального блюда кроется в деталях!</b>\n\nЯ — ваш личный профессиональный Шеф. Чем интереснее вы опишете, что хотите, тем вкуснее будет результат!\n\n❌ <b>Скучный запрос:</b> <i>жареная картошка с мясом</i>\n✅ <b>Ресторанный запрос:</b> <i>как приготовить картошку с говядиной как в дорогом ресторане, с необычным сливочным соусом и красивой подачей?</i>\n\nЖмите «🔍 Найти рецепт» и дайте волю фантазии! 🪄", parse_mode="HTML")
         return
 
+    # Логика выдачи VIP
     if state == "waiting_for_user_id" and user_id == ADMIN_ID:
         try:
             target_id = int(text.strip())
@@ -217,33 +202,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка. Пришлите только цифры ID.")
         return
 
+    # Логика УДАЛЕНИЯ пользователя
+    if state == "waiting_for_delete_id" and user_id == ADMIN_ID:
+        try:
+            target_id = int(text.strip())
+            if target_id == ADMIN_ID:
+                await update.message.reply_text("❌ Вы не можете удалить сами себя!")
+                user_states[user_id] = "start"
+                return
+                
+            conn = await asyncpg.connect(DATABASE_URL)
+            deleted = await conn.execute("DELETE FROM users WHERE user_id = $1", target_id)
+            await conn.close()
+            
+            if deleted == "DELETE 0":
+                await update.message.reply_text("⚠️ Пользователь с таким ID не найден в базе.")
+            else:
+                await update.message.reply_text(f"✅ Пользователь {target_id} навсегда удален из базы бота!")
+            user_states[user_id] = "start"
+        except:
+            await update.message.reply_text("❌ Ошибка. Пришлите только цифры ID.")
+        return
+
     if text == "💬 Наш Чат-Форум":
         inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити Шефа", url=GROUP_LINK)]]
         await update.message.reply_text("👨‍🍳 <b>Добро пожаловать на нашу Кухню!</b>\n\nПрисоединяйтесь, там очень вкусно и интересно! 👇", reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="HTML")
         return
 
-    # --- КНОПКА ПОДПИСКИ С КАССОЙ ---
     if text == "👑 Моя подписка":
         pricing_info = "\n\n💎 <b>Условия подписки:</b>\nПервые 48 часов — БЕСПЛАТНО\nДалее — всего 249 рублей в месяц."
         legal_info = "\n\n📝 <b>Официальная информация:</b>\nСамозанятый Ширякин О.Ю.\nИНН: 732705248482\nEmail: al.smm-manager@yandex.ru"
-        
         if user_id == ADMIN_ID:
             await update.message.reply_text(f"👑 <b>Тариф:</b> Владелец проекта\n⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{legal_info}", parse_mode="HTML")
             return
-            
         conn = await asyncpg.connect(DATABASE_URL)
         row = await conn.fetchrow('SELECT created_at, has_premium FROM users WHERE user_id = $1', user_id)
         await conn.close()
-        
         if row and row['has_premium']:
             await update.message.reply_text(f"👑 <b>Тариф:</b> VIP Доступ\n⏳ <b>Осталось:</b> Оплачено ✅\n{legal_info}", parse_mode="HTML")
         else:
             payment_url = get_payment_link(user_id)
             pay_keyboard = [[InlineKeyboardButton("💎 Оплатить VIP (249 руб)", url=payment_url)]]
-            
             diff = datetime.datetime.now() - row['created_at']
             hours_passed = diff.total_seconds() / 3600
-            
             if hours_passed >= 48:
                 await update.message.reply_text(f"👑 <b>Тариф:</b> Истек ❌\n⏳ Ваш бесплатный период завершен.\n\nОформите подписку, чтобы продолжить!{pricing_info}{legal_info}", reply_markup=InlineKeyboardMarkup(pay_keyboard), parse_mode="HTML")
             else:
@@ -256,7 +257,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\nК сожалению, доступ к генерации рецептов, вашей базе и списку закрыт 🔒\n\nЧтобы продолжить пользоваться Шефом, перейдите в меню «👑 Моя подписка».", parse_mode="HTML")
         return
 
-    # Логика меню генерации
     if text == "🔍 Найти рецепт":
         user_states[user_id] = "find_recipe"
         await update.message.reply_text("Напишите, какой рецепт вы хотите найти.")
@@ -381,6 +381,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user_id, text="👇 <b>Пришлите ID пользователя (только цифры):</b>", parse_mode="HTML")
         return
 
+    if query.data == "delete_user":
+        if user_id == ADMIN_ID:
+            user_states[user_id] = "waiting_for_delete_id"
+            await context.bot.send_message(chat_id=user_id, text="👇 <b>Пришлите ID пользователя</b>, которого нужно удалить из базы:", parse_mode="HTML")
+        return
+
     has_access = await check_access(user_id)
     if not has_access:
         await context.bot.send_message(chat_id=user_id, text="⏳ Ваш бесплатный период завершен. Функция заблокирована 🔒")
@@ -394,7 +400,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("UPDATE users SET shopping_list = COALESCE(shopping_list, '') || '\n\n' || $1 WHERE user_id = $2", ingredients, user_id)
             await conn.close()
             await context.bot.send_message(chat_id=user_id, text="🛒 ✅ Ингредиенты добавлены в список продуктов!")
-        except Exception as e: pass
+        except: pass
 
     elif query.data == "save_recipe":
         try:
@@ -403,7 +409,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("UPDATE users SET saved_recipes = COALESCE(saved_recipes, '') || $1 WHERE user_id = $2", full_recipe, user_id)
             await conn.close()
             await context.bot.send_message(chat_id=user_id, text="⭐ ✅ Рецепт сохранен в базе!")
-        except Exception as e: pass
+        except: pass
 
     elif query.data == "replace_btn":
         user_states[user_id] = "replace_ingredient"
@@ -427,7 +433,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")]
             ]
             await context.bot.send_message(chat_id=user_id, text=recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e: pass
+        except: pass
 
     elif query.data == "clear_list":
         conn = await asyncpg.connect(DATABASE_URL)
@@ -451,7 +457,6 @@ async def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    # Запускаем веб-сервер для Робокассы на порту 8080
     web_app = web.Application()
     web_app.router.add_post('/robokassa', robokassa_handler)
     web_app['bot'] = app.bot
@@ -461,13 +466,10 @@ async def main():
     await site.start()
     logging.info("🌍 Сервер оплат Робокассы успешно запущен на порту 8080!")
 
-    # Запускаем бота
     async with app:
         await app.start()
         await app.updater.start_polling()
         logging.info("🤖 Бот успешно запущен!")
-        
-        # Заставляем код работать вечно
         stop_event = asyncio.Event()
         await stop_event.wait()
 
