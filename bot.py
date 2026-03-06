@@ -27,7 +27,7 @@ ROBOKASSA_PASS_2 = "l1ONgktiTu3kocNc94v1"
 ROBOKASSA_TEST_PASS_1 = "nl9Blk5uVX35zO3xaeoE"
 ROBOKASSA_TEST_PASS_2 = "Taf1jpWp2Jr1w4eMz3sC"
 
-IS_TEST_MODE = True  
+IS_TEST_MODE = False  
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url="https://api.proxyapi.ru/openai/v1")
