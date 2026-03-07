@@ -30,7 +30,7 @@ from openai import AsyncOpenAI
 # =========================
 TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
 OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
-DATABASE_URL = "PASTE_YOUR_DATABASE_URL"
+DATABASE_URL = "postgresql://botuser:botpass123@127.0.0.1:5432/botdb"
 
 ADMIN_ID = 230764474
 GROUP_LINK = "https://t.me/premium_chef_ru"
