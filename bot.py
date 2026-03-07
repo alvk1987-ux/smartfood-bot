@@ -195,6 +195,9 @@ LEGAL_TEXT = (
     "• Бот собирает только Telegram ID для идентификации подписки. Платежные данные обрабатываются на стороне Robokassa."
 )
 
+# =========================
+# DB
+# =========================
 async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
@@ -206,12 +209,13 @@ async def init_db():
                 username TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 premium_until TIMESTAMP NULL,
-                shopping_list TEXT DEFAULT '',
-                source TEXT,
-                onboarding_done BOOLEAN DEFAULT FALSE,
-                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                shopping_list TEXT DEFAULT ''
             )
         """)
+
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS source TEXT")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_done BOOLEAN DEFAULT FALSE")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS payments (
@@ -413,6 +417,8 @@ async def send_due_scheduled_messages(app: Application):
                         await log_event(user_id, "scheduled_message_sent", msg_type)
                     except Exception:
                         logger.exception("Ошибка отправки отложенного сообщения user_id=%s", user_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Ошибка фоновой отправки scheduled messages")
 
@@ -580,6 +586,9 @@ def recipe_actions_keyboard():
         [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")],
     ])
 
+# =========================
+# ADMIN STATS
+# =========================
 async def get_admin_stats_data():
     async with db_pool.acquire() as conn:
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
@@ -594,10 +603,12 @@ async def get_admin_stats_data():
         """)
         total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
         revenue = await conn.fetchval("SELECT COALESCE(SUM(amount), 0) FROM payments")
+
         total_starts = await conn.fetchval("""
             SELECT COUNT(*) FROM events
             WHERE event_name = 'start'
         """)
+
         starts_today = await conn.fetchval("""
             SELECT COUNT(*) FROM events
             WHERE event_name = 'start'
@@ -621,10 +632,12 @@ async def get_admin_stats_data():
             WHERE event_name IN ('photo_calories', 'recipe_from_photo')
               AND created_at::date = CURRENT_DATE
         """)
+
         total_conversion = (total_payments / total_starts * 100) if total_starts else 0
         today_conversion = (payments_today / starts_today * 100) if starts_today else 0
         arpu = (float(revenue) / total_users) if total_users else 0
         arppu = (float(revenue) / total_payments) if total_payments else 0
+
         top_sources = await conn.fetch("""
             SELECT COALESCE(source, 'unknown') AS src, COUNT(*) AS cnt
             FROM users
@@ -654,6 +667,7 @@ async def get_admin_stats_data():
 
 async def get_admin_stats_text():
     data = await get_admin_stats_data()
+
     source_lines = []
     for row in data["top_sources"]:
         source_lines.append(f"• {row['src']} — {row['cnt']}")
@@ -783,6 +797,9 @@ def admin_stats_keyboard():
         [InlineKeyboardButton("🗑 Удалить пользователя", callback_data="delete_user")],
     ])
 
+# =========================
+# PAYMENT
+# =========================
 async def robokassa_handler(request):
     try:
         data = await request.post()
@@ -829,6 +846,9 @@ async def robokassa_handler(request):
         logger.exception("Ошибка в robokassa_handler")
         return web.Response(text="ERROR", status=500)
 
+# =========================
+# HANDLERS
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     source = context.args[0] if context.args else None
@@ -1017,17 +1037,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "🧺 Попробовать: Из того, что есть":
         context.user_data["state"] = "from_fridge"
-        await update.message.reply_text("Напишите продукты, которые у вас есть (через запятую).", reply_markup=get_main_menu())
+        await update.message.reply_text(
+            "Напишите продукты, которые у вас есть (через запятую).",
+            reply_markup=get_main_menu()
+        )
         return
 
     if text == "⚡ Попробовать: Быстрый ужин":
         context.user_data["state"] = "quick_dinner"
-        await update.message.reply_text("Напишите главный продукт для быстрого ужина.", reply_markup=get_main_menu())
+        await update.message.reply_text(
+            "Напишите главный продукт для быстрого ужина.",
+            reply_markup=get_main_menu()
+        )
         return
 
     if text == "📸 Попробовать: Калории по фото":
         context.user_data["state"] = "photo_calories"
-        await update.message.reply_text("📸 Отправьте фото вашей еды.", reply_markup=get_main_menu())
+        await update.message.reply_text(
+            "📸 Отправьте фото вашей еды.",
+            reply_markup=get_main_menu()
+        )
         return
 
     has_access = await check_access(user_id)
@@ -1436,21 +1465,24 @@ async def main():
     await site.start()
     logger.info("🌍 Сервер Robokassa запущен на порту 8080")
 
+    scheduler_task = None
+
     async with app:
         await app.start()
-        scheduler_task = asyncio.create_task(send_due_scheduled_messages(app))
         await app.updater.start_polling()
         logger.info("🤖 Бот запущен")
 
-        stop_event = asyncio.Event()
+        scheduler_task = asyncio.create_task(send_due_scheduled_messages(app))
+
         try:
-            await stop_event.wait()
+            await asyncio.Event().wait()
         finally:
-            scheduler_task.cancel()
-            try:
-                await scheduler_task
-            except asyncio.CancelledError:
-                pass
+            if scheduler_task:
+                scheduler_task.cancel()
+                try:
+                    await scheduler_task
+                except asyncio.CancelledError:
+                    pass
 
 if __name__ == "__main__":
     asyncio.run(main())
