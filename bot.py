@@ -1453,12 +1453,11 @@ async def main():
     await site.start()
     logger.info("🌍 Сервер Robokassa запущен на порту 8080")
 
-    async with app:
+        async with app:
         await app.start()
+        scheduler_task = asyncio.create_task(send_due_scheduled_messages(app))
         await app.updater.start_polling()
         logger.info("🤖 Бот запущен")
-
-        scheduler_task = asyncio.create_task(send_due_scheduled_messages(app))
 
         stop_event = asyncio.Event()
         try:
