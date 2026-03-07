@@ -195,9 +195,6 @@ LEGAL_TEXT = (
     "• Бот собирает только Telegram ID для идентификации подписки. Платежные данные обрабатываются на стороне Robokassa."
 )
 
-# =========================
-# DB
-# =========================
 async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
@@ -583,9 +580,6 @@ def recipe_actions_keyboard():
         [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")],
     ])
 
-# =========================
-# ADMIN STATS
-# =========================
 async def get_admin_stats_data():
     async with db_pool.acquire() as conn:
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
@@ -600,12 +594,10 @@ async def get_admin_stats_data():
         """)
         total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
         revenue = await conn.fetchval("SELECT COALESCE(SUM(amount), 0) FROM payments")
-
         total_starts = await conn.fetchval("""
             SELECT COUNT(*) FROM events
             WHERE event_name = 'start'
         """)
-
         starts_today = await conn.fetchval("""
             SELECT COUNT(*) FROM events
             WHERE event_name = 'start'
@@ -629,12 +621,10 @@ async def get_admin_stats_data():
             WHERE event_name IN ('photo_calories', 'recipe_from_photo')
               AND created_at::date = CURRENT_DATE
         """)
-
         total_conversion = (total_payments / total_starts * 100) if total_starts else 0
         today_conversion = (payments_today / starts_today * 100) if starts_today else 0
         arpu = (float(revenue) / total_users) if total_users else 0
         arppu = (float(revenue) / total_payments) if total_payments else 0
-
         top_sources = await conn.fetch("""
             SELECT COALESCE(source, 'unknown') AS src, COUNT(*) AS cnt
             FROM users
@@ -664,7 +654,6 @@ async def get_admin_stats_data():
 
 async def get_admin_stats_text():
     data = await get_admin_stats_data()
-
     source_lines = []
     for row in data["top_sources"]:
         source_lines.append(f"• {row['src']} — {row['cnt']}")
@@ -794,9 +783,6 @@ def admin_stats_keyboard():
         [InlineKeyboardButton("🗑 Удалить пользователя", callback_data="delete_user")],
     ])
 
-# =========================
-# PAYMENT
-# =========================
 async def robokassa_handler(request):
     try:
         data = await request.post()
@@ -843,9 +829,6 @@ async def robokassa_handler(request):
         logger.exception("Ошибка в robokassa_handler")
         return web.Response(text="ERROR", status=500)
 
-# =========================
-# HANDLERS
-# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     source = context.args[0] if context.args else None
@@ -1453,7 +1436,7 @@ async def main():
     await site.start()
     logger.info("🌍 Сервер Robokassa запущен на порту 8080")
 
-        async with app:
+    async with app:
         await app.start()
         scheduler_task = asyncio.create_task(send_due_scheduled_messages(app))
         await app.updater.start_polling()
