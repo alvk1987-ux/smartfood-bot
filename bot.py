@@ -1,3 +1,4 @@
+import os
 import logging
 import asyncpg
 import base64
@@ -8,6 +9,7 @@ import hashlib
 import urllib.parse
 import asyncio
 from aiohttp import web
+from dotenv import load_dotenv
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -25,22 +27,24 @@ from telegram.ext import (
 from telegram.constants import ChatAction
 from openai import AsyncOpenAI
 
+load_dotenv()
+
 # =========================
 # НАСТРОЙКИ
 # =========================
-TELEGRAM_TOKEN = "8605434358:AAGBtCzenMeZOGMKJsbMXgY78SnFUC7beL4"
-OPENAI_API_KEY = "sk-ZLVREHzoyNGeM8hTTkDEqP4ErNAPiH2y"
-DATABASE_URL = "postgresql://botuser:botpass123@127.0.0.1:5432/botdb"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 ADMIN_ID = 230764474
 GROUP_LINK = "https://t.me/premium_chef_ru"
 BOT_USERNAME = "your_bot_username"
 
-ROBOKASSA_SHOP_ID = "PASTE_YOUR_ROBOKASSA_SHOP_ID"
-ROBOKASSA_PASS_1 = "PASTE_YOUR_ROBOKASSA_PASS_1"
-ROBOKASSA_PASS_2 = "PASTE_YOUR_ROBOKASSA_PASS_2"
-ROBOKASSA_TEST_PASS_1 = "PASTE_YOUR_ROBOKASSA_TEST_PASS_1"
-ROBOKASSA_TEST_PASS_2 = "PASTE_YOUR_ROBOKASSA_TEST_PASS_2"
+ROBOKASSA_SHOP_ID = os.getenv("ROBOKASSA_SHOP_ID", "")
+ROBOKASSA_PASS_1 = os.getenv("ROBOKASSA_PASS_1", "")
+ROBOKASSA_PASS_2 = os.getenv("ROBOKASSA_PASS_2", "")
+ROBOKASSA_TEST_PASS_1 = os.getenv("ROBOKASSA_TEST_PASS_1", "")
+ROBOKASSA_TEST_PASS_2 = os.getenv("ROBOKASSA_TEST_PASS_2", "")
 
 IS_TEST_MODE = False
 
