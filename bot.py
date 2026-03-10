@@ -38,7 +38,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 ADMIN_ID = 230764474
 GROUP_LINK = "https://t.me/premium_chef_ru"
-BOT_USERNAME = "your_bot_username"
+BOT_USERNAME = "recept_chef_ai_bot"
 
 ROBOKASSA_SHOP_ID = os.getenv("ROBOKASSA_SHOP_ID", "")
 ROBOKASSA_PASS_1 = os.getenv("ROBOKASSA_PASS_1", "")
@@ -340,22 +340,41 @@ async def trial_hours_left(user_id: int):
     diff = datetime.datetime.now() - row["created_at"]
     return int(max(0, TRIAL_HOURS - (diff.total_seconds() / 3600)))
 
+def get_bot_link():
+    return f"https://t.me/{BOT_USERNAME}"
+
+def build_payment_keyboard(payment_url: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"💎 Оплатить VIP за {int(PRICE_RUB)} ₽", url=payment_url)]
+    ])
+
 def get_payment_link(user_id: int):
     amount = f"{PRICE_RUB:.2f}"
     inv_id = int(time.time() * 1000) % 100000000000
     description = "VIP Подписка на Premium Шеф"
     pass1 = ROBOKASSA_TEST_PASS_1 if IS_TEST_MODE else ROBOKASSA_PASS_1
+
+    success_url = get_bot_link()
+    fail_url = get_bot_link()
+
     signature_str = f"{ROBOKASSA_SHOP_ID}:{amount}:{inv_id}:{pass1}:Shp_chatId={user_id}"
     hash_md5 = hashlib.md5(signature_str.encode()).hexdigest()
-    desc_encoded = urllib.parse.quote(description)
-    url = (
-        f"https://auth.robokassa.ru/Merchant/Index.aspx?"
-        f"MerchantLogin={ROBOKASSA_SHOP_ID}&OutSum={amount}&InvId={inv_id}&"
-        f"Description={desc_encoded}&SignatureValue={hash_md5}&Shp_chatId={user_id}"
-    )
+
+    params = {
+        "MerchantLogin": ROBOKASSA_SHOP_ID,
+        "OutSum": amount,
+        "InvId": inv_id,
+        "Description": description,
+        "SignatureValue": hash_md5,
+        "Shp_chatId": str(user_id),
+        "SuccessUrl2": success_url,
+        "FailUrl2": fail_url,
+    }
+
     if IS_TEST_MODE:
-        url += "&IsTest=1"
-    return url
+        params["IsTest"] = "1"
+
+    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urllib.parse.urlencode(params)
 
 async def schedule_trial_end_messages(user_id: int):
     async with db_pool.acquire() as conn:
@@ -400,9 +419,7 @@ async def send_due_scheduled_messages(app: Application):
                         continue
 
                     payment_url = get_payment_link(user_id)
-                    kb = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💎 Оплатить VIP", url=payment_url)]
-                    ])
+                    kb = build_payment_keyboard(payment_url)
 
                     if msg_type == "trial_end_12h":
                         text = (
@@ -813,15 +830,22 @@ async def robokassa_handler(request):
         user_id = data.get("Shp_chatId")
         pass2 = ROBOKASSA_TEST_PASS_2 if IS_TEST_MODE else ROBOKASSA_PASS_2
 
+        logger.info(f"ROBOKASSA CALLBACK: inv_id={inv_id}, user_id={user_id}, out_sum={out_sum}")
+
         my_sig = f"{out_sum}:{inv_id}:{pass2}:Shp_chatId={user_id}"
         my_hash = hashlib.md5(my_sig.encode()).hexdigest().upper()
 
         if my_hash != signature.upper():
+            logger.warning(f"ROBOKASSA BAD SIGNATURE: inv_id={inv_id}, user_id={user_id}, out_sum={out_sum}")
             return web.Response(text="BAD SIGNATURE", status=400)
 
         async with db_pool.acquire() as conn:
-            existing = await conn.fetchrow("SELECT inv_id FROM payments WHERE inv_id = $1", int(inv_id))
+            existing = await conn.fetchrow(
+                "SELECT inv_id FROM payments WHERE inv_id = $1",
+                int(inv_id)
+            )
             if existing:
+                logger.info(f"ROBOKASSA DUPLICATE: inv_id={inv_id}, user_id={user_id}")
                 return web.Response(text=f"OK{inv_id}")
 
             await conn.execute("""
@@ -831,6 +855,7 @@ async def robokassa_handler(request):
 
         premium_until = await activate_premium(int(user_id))
         await log_event(int(user_id), "payment_success", out_sum)
+        logger.info(f"ROBOKASSA SUCCESS: inv_id={inv_id}, user_id={user_id}, out_sum={out_sum}")
 
         bot = request.app["bot"]
         try:
@@ -947,7 +972,7 @@ async def show_subscription(update: Update, user_id: int):
 
     now = datetime.datetime.now()
     payment_url = get_payment_link(user_id)
-    pay_keyboard = [[InlineKeyboardButton(f"💎 Оплатить VIP ({int(PRICE_RUB)} руб)", url=payment_url)]]
+    pay_keyboard = build_payment_keyboard(payment_url)
 
     if row["premium_until"] and row["premium_until"] > now:
         await update.message.reply_text(
@@ -962,14 +987,14 @@ async def show_subscription(update: Update, user_id: int):
                 f"👑 <b>Тариф:</b> Истек ❌\n"
                 "⏳ Ваш бесплатный период завершен.\n\n"
                 f"Оформите подписку, чтобы продолжить!{pricing_info}",
-                reply_markup=InlineKeyboardMarkup(pay_keyboard),
+                reply_markup=pay_keyboard,
                 parse_mode="HTML"
             )
         else:
             await update.message.reply_text(
                 f"👑 <b>Тариф:</b> Пробный VIP\n"
                 f"⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}",
-                reply_markup=InlineKeyboardMarkup(pay_keyboard),
+                reply_markup=pay_keyboard,
                 parse_mode="HTML"
             )
 
@@ -1066,7 +1091,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     has_access = await check_access(user_id)
     if not has_access:
         payment_url = get_payment_link(user_id)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💎 Оплатить VIP", url=payment_url)]])
+        kb = build_payment_keyboard(payment_url)
         await update.message.reply_text(
             "⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\n"
             "Доступ к рецептам, списку покупок и сохранениям сейчас закрыт.\n\n"
@@ -1234,7 +1259,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     has_access = await check_access(user_id)
     if not has_access:
         payment_url = get_payment_link(user_id)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💎 Оплатить VIP", url=payment_url)]])
+        kb = build_payment_keyboard(payment_url)
         await update.message.reply_text(
             "⏳ Ваш бесплатный период подошел к концу. Оформите подписку, чтобы продолжить.",
             reply_markup=kb
