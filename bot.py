@@ -354,9 +354,6 @@ def get_payment_link(user_id: int):
     description = "VIP Подписка на Premium Шеф"
     pass1 = ROBOKASSA_TEST_PASS_1 if IS_TEST_MODE else ROBOKASSA_PASS_1
 
-    success_url = get_bot_link()
-    fail_url = get_bot_link()
-
     signature_str = f"{ROBOKASSA_SHOP_ID}:{amount}:{inv_id}:{pass1}:Shp_chatId={user_id}"
     hash_md5 = hashlib.md5(signature_str.encode()).hexdigest()
 
@@ -367,8 +364,6 @@ def get_payment_link(user_id: int):
         "Description": description,
         "SignatureValue": hash_md5,
         "Shp_chatId": str(user_id),
-        "SuccessUrl2": success_url,
-        "FailUrl2": fail_url,
     }
 
     if IS_TEST_MODE:
