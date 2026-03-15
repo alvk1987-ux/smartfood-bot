@@ -974,11 +974,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = row["user_id"]
         try:
             await context.bot.send_message(
-                chat_id=target_user_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=get_main_menu()
-            )
+    chat_id=target_user_id,
+    text="👨‍🍳 Что готовим сегодня? Выберите рецепт в меню ниже.",
+    reply_markup=get_main_menu()
+)
             success += 1
             await asyncio.sleep(0.05)
         except Exception:
