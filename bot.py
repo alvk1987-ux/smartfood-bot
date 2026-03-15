@@ -70,19 +70,22 @@ logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 db_pool = None
 
+# =========================
+# МЕНЮ
+# =========================
 MENU_FREE = [
     ["📖 Как общаться с Шефом"],
-    ["🔍 Найти рецепт", "🧺 Из того, что есть"],
-    ["⚡ Быстрый ужин", "🥗 Рецепты для похудения"],
-    ["🛒 Мой список покупок", "📸 Калории по фото"],
-    ["⭐ Сохраненные рецепты", "🕘 История рецептов"],
-    ["📷 Рецепт по фото", "👑 Моя подписка"],
-    ["💬 Наш Чат-Форум", "📜 Правовая информация"],
+    ["🔍 Найти рецепт", "📷 Рецепт по фото"],
+    ["🧺 Из того, что есть", "📸 Калории по фото"],
+    ["🥗 Рецепты для похудения", "👑 Моя подписка"],
+    ["🕘 История рецептов", "📜 Правовая информация"],
+    ["🛒 Мой список покупок", "⭐ Сохраненные рецепты"],
+    ["💬 Наш чат-форум"],
 ]
 
 ONBOARDING_MENU = [
     ["🧺 Попробовать: Из того, что есть"],
-    ["⚡ Попробовать: Быстрый ужин"],
+    ["📷 Попробовать: Рецепт по фото"],
     ["📸 Попробовать: Калории по фото"],
 ]
 
@@ -116,9 +119,9 @@ GUIDE_TEXT = (
     "Он помогает, когда:\n"
     "• не знаете, что приготовить сегодня\n"
     "• хотите использовать продукты, которые уже есть дома\n"
-    "• нужен быстрый ужин после работы\n"
     "• хотите более легкие блюда с КБЖУ\n"
-    "• нужно сохранить удачные рецепты и собрать список покупок\n\n"
+    "• нужно сохранить удачные рецепты и собрать список покупок\n"
+    "• хотите получить рецепт по фото блюда\n\n"
     "➖➖➖➖➖➖➖➖➖➖\n"
     "<b>1. Как правильно писать запросы</b>\n"
     "➖➖➖➖➖➖➖➖➖➖\n\n"
@@ -126,10 +129,10 @@ GUIDE_TEXT = (
     "Чем конкретнее запрос, тем полезнее получится результат.\n\n"
     "<b>Хорошие примеры:</b>\n"
     "• «Что приготовить из курицы, сыра и макарон»\n"
-    "• «Сделай быстрый ужин из фарша за 20 минут»\n"
     "• «Подбери легкий ужин до 500 ккал»\n"
     "• «Нужен ужин без молочки и без лука»\n"
-    "• «Хочу что-то необычное из индейки в духовке»\n\n"
+    "• «Хочу что-то необычное из индейки в духовке»\n"
+    "• «Сделай рецепт из творога и яблок»\n\n"
     "Можно указывать:\n"
     "• главный продукт\n"
     "• желаемое время приготовления\n"
@@ -142,8 +145,6 @@ GUIDE_TEXT = (
     "Используйте, когда уже примерно знаете, чего хотите.\n\n"
     "<b>🧺 Из того, что есть</b>\n"
     "Самая удобная кнопка, когда не хочется идти в магазин. Просто перечислите продукты, и Шеф соберет из них блюдо.\n\n"
-    "<b>⚡ Быстрый ужин</b>\n"
-    "Для ситуаций, когда нужно приготовить что-то вкусное без долгой возни.\n\n"
     "<b>🥗 Рецепты для похудения</b>\n"
     "Когда нужен более легкий вариант с акцентом на КБЖУ.\n\n"
     "<b>📸 Калории по фото</b>\n"
@@ -158,6 +159,8 @@ GUIDE_TEXT = (
     "Позволяет быстро вернуться к последним рецептам.\n\n"
     "<b>👑 Моя подписка</b>\n"
     "Здесь можно посмотреть статус доступа и оформить VIP.\n\n"
+    "<b>💬 Наш чат-форум</b>\n"
+    "Место, где пользователи делятся блюдами, идеями и вдохновением.\n\n"
     "➖➖➖➖➖➖➖➖➖➖\n"
     "<b>3. Что означают кнопки под рецептом</b>\n"
     "➖➖➖➖➖➖➖➖➖➖\n\n"
@@ -175,8 +178,8 @@ GUIDE_TEXT = (
     "➖➖➖➖➖➖➖➖➖➖\n\n"
     "Если хотите быстро понять, насколько это удобно, начните с одной из этих кнопок:\n"
     "• <b>🧺 Из того, что есть</b> — если хотите приготовить из того, что уже лежит дома\n"
-    "• <b>⚡ Быстрый ужин</b> — если нужен ужин без лишних раздумий\n"
-    "• <b>📸 Калории по фото</b> — если хотите сразу протестировать одну из самых интересных функций\n\n"
+    "• <b>📷 Рецепт по фото</b> — если хотите получить домашний рецепт по изображению блюда\n"
+    "• <b>📸 Калории по фото</b> — если хотите быстро оценить КБЖУ\n\n"
     "Шеф создан, чтобы <b>экономить вам время, снимать ежедневную головную боль «что приготовить» и делать готовку проще</b>.\n\n"
     "Выбирайте кнопку в меню и давайте готовить 👇"
 )
@@ -945,6 +948,48 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет доступа к этой команде.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Использование:\n"
+            "/broadcast текст сообщения"
+        )
+        return
+
+    text = " ".join(context.args)
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users")
+
+    success = 0
+    failed = 0
+
+    for row in rows:
+        target_user_id = row["user_id"]
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=text,
+                parse_mode="HTML"
+            )
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+            logger.exception("Ошибка рассылки user_id=%s", target_user_id)
+
+    await update.message.reply_text(
+        f"✅ Рассылка завершена.\n"
+        f"Успешно: {success}\n"
+        f"Ошибок: {failed}"
+    )
+
 async def show_subscription(update: Update, user_id: int):
     pricing_info = (
         f"\n\n💎 <b>Условия подписки:</b>\n"
@@ -1014,11 +1059,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_subscription(update, user_id)
         return
 
-    if text == "💬 Наш Чат-Форум":
+    if text == "💬 Наш чат-форум":
         inline_kb = [[InlineKeyboardButton("🚀 Перейти в Комьюнити Шефа", url=GROUP_LINK)]]
         await update.message.reply_text(
-            "👨‍🍳 <b>Добро пожаловать на нашу Кухню!</b>\n\n"
-            "Присоединяйтесь, там вкусно и интересно 👇",
+            "💬 <b>Наш чат-форум Шефа</b>\n\n"
+            "Там участники делятся:\n"
+            "• своими блюдами\n"
+            "• идеями для ужина\n"
+            "• полезными находками\n"
+            "• вдохновением на неделю 👨‍🍳\n\n"
+            "Присоединяйтесь 👇",
             reply_markup=InlineKeyboardMarkup(inline_kb),
             parse_mode="HTML"
         )
@@ -1067,10 +1117,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "⚡ Попробовать: Быстрый ужин":
-        context.user_data["state"] = "quick_dinner"
+    if text == "📷 Попробовать: Рецепт по фото":
+        context.user_data["state"] = "recipe_from_photo"
         await update.message.reply_text(
-            "Напишите главный продукт для быстрого ужина.",
+            "📷 <b>Отправьте фото блюда</b>\n\n"
+            "Я посмотрю, что на нём изображено, и предложу вам похожий домашний рецепт 👨‍🍳\n\n"
+            "Лучше всего подходят:\n"
+            "• фото готового блюда\n"
+            "• хорошее освещение\n"
+            "• блюдо крупным планом",
+            parse_mode="HTML",
             reply_markup=get_main_menu()
         )
         return
@@ -1116,17 +1172,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "⚡ Быстрый ужин":
-        context.user_data["state"] = "quick_dinner"
-        await update.message.reply_text(
-            "Напишите главный продукт.\n\n"
-            "Пример:\n"
-            "индейка\n"
-            "или\n"
-            "яйца"
-        )
-        return
-
     if text == "🥗 Рецепты для похудения":
         context.user_data["state"] = "diet_recipe"
         await update.message.reply_text(
@@ -1140,12 +1185,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📸 Калории по фото":
         context.user_data["state"] = "photo_calories"
-        await update.message.reply_text("📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ!")
+        await update.message.reply_text(
+            "📸 Отправьте мне фотографию вашей еды, и я посчитаю примерное КБЖУ!"
+        )
         return
 
     if text == "📷 Рецепт по фото":
         context.user_data["state"] = "recipe_from_photo"
-        await update.message.reply_text("📷 Отправьте фото блюда, и я предложу похожий рецепт для дома.")
+        await update.message.reply_text(
+            "📷 <b>Отправьте фото блюда</b>\n\n"
+            "Я посмотрю, что на нём изображено, и предложу вам похожий домашний рецепт 👨‍🍳\n\n"
+            "Лучше всего подходят:\n"
+            "• фото готового блюда\n"
+            "• хорошее освещение\n"
+            "• блюдо крупным планом",
+            parse_mode="HTML"
+        )
         return
 
     if text == "🛒 Мой список покупок":
@@ -1199,7 +1254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_event(user_id, "history_opened")
         return
 
-    if state in ["find_recipe", "from_fridge", "quick_dinner", "diet_recipe", "replace_ingredient"]:
+    if state in ["find_recipe", "from_fridge", "diet_recipe", "replace_ingredient"]:
         limited, reason = await is_rate_limited(user_id)
         if limited:
             await update.message.reply_text(f"⏳ {reason}")
@@ -1218,10 +1273,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_prompt = f"Сделай рецепт строго из этих продуктов (или части): {text}."
             context.user_data["last_prompt"] = text
             source_mode = "from_fridge"
-        elif state == "quick_dinner":
-            user_prompt = f"Сделай очень БЫСТРЫЙ рецепт (до 20 минут), главное: {text}."
-            context.user_data["last_prompt"] = text
-            source_mode = "quick_dinner"
         elif state == "diet_recipe":
             user_prompt = f"Сделай низкокалорийный ДИЕТИЧЕСКИЙ рецепт, главное: {text}."
             context.user_data["last_prompt"] = text
@@ -1284,14 +1335,36 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🌾 Углеводы: ..."
             )
             event_name = "photo_calories"
+
         elif state == "recipe_from_photo":
             prompt = (
-                "Определи блюдо на фото и предложи похожий домашний рецепт. "
-                "Ответ дай строго в формате рецепта: название, время, порции, КБЖУ, ингредиенты, приготовление."
+                "Определи блюдо на фото и предложи похожий домашний рецепт.\n"
+                "Ответ должен быть красивым, аппетитным и оформленным со смайликами.\n"
+                "Структура ответа строго такая:\n\n"
+                "🍽 <название блюда>\n\n"
+                "✨ Похоже, на фото: <краткое описание блюда>\n\n"
+                "⏱ Время: <значение>\n"
+                "🍽 Порции: <значение>\n\n"
+                "⚖️ КБЖУ на 100 г:\n"
+                "🔥 Калории: <значение>\n"
+                "🥩 Белки: <значение>\n"
+                "🥑 Жиры: <значение>\n"
+                "🌾 Углеводы: <значение>\n\n"
+                "🛒 Ингредиенты:\n"
+                "• ...\n"
+                "• ...\n\n"
+                "👨‍🍳 Приготовление:\n"
+                "1. ...\n"
+                "2. ...\n"
+                "3. ...\n\n"
+                "В конце добавь одну короткую аппетитную фразу, например: «Приятного аппетита! 😋»"
             )
             event_name = "recipe_from_photo"
+
         else:
-            await update.message.reply_text("Сначала выберите нужную функцию: «📸 Калории по фото» или «📷 Рецепт по фото».")
+            await update.message.reply_text(
+                "Сначала выберите нужную функцию: «📸 Калории по фото» или «📷 Рецепт по фото»."
+            )
             return
 
         response = await asyncio.wait_for(
@@ -1474,6 +1547,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_click))
