@@ -1184,7 +1184,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⏳ <b>Ваш пробный период 24 часа завершен!</b>\n\n"
             "Доступ к рецептам, списку покупок и сохранениям сейчас закрыт.\n\n"
-            "Чтобы продолжить пользоваться Шефом, откройте «👑 Моя подписка».",
+            "Чтобы продолжить пользоваться Шефом, оформите подписку 👇",
             parse_mode="HTML",
             reply_markup=kb
         )
@@ -1512,7 +1512,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_access and query.data not in ["clear_saved", "clear_history", "clear_list"]:
         await context.bot.send_message(
             chat_id=user_id,
-            text="⏳ Ваш пробный период 24 часа завершен. Функция заблокирована 🔒"
+            text=(
+                "⏳ <b>Ваш пробный период 24 часа завершен!</b>\n\n"
+                "Эта функция сейчас недоступна.\n\n"
+                "Оформите подписку, чтобы продолжить пользоваться Шефом 👇"
+            ),
+            parse_mode="HTML",
+            reply_markup=build_payment_keyboard(get_payment_link(user_id))
         )
         return
 
