@@ -1021,10 +1021,16 @@ async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Успешно: {success}\n"
         f"Ошибок: {failed}"
     )
+async def show_subscription(update: Update, user_id: int):
+    pricing_info = (
+        f"\n\n💳 <b>VIP на {PREMIUM_DAYS} дней</b> — {int(PRICE_RUB)} ₽\n"
+        "После оплаты доступ активируется автоматически."
+    )
+
     if user_id == ADMIN_ID:
         await update.message.reply_text(
             f"👑 <b>Тариф:</b> Владелец проекта\n"
-            f"⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА\n{pricing_info}",
+            f"⏳ <b>Осталось:</b> БЕЗЛИМИТ НАВСЕГДА{pricing_info}",
             parse_mode="HTML"
         )
         return
@@ -1063,8 +1069,7 @@ async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYP
             )
 
     await log_event(user_id, "subscription_opened")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
