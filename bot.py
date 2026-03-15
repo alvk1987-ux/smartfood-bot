@@ -976,7 +976,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=target_user_id,
                 text=text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=get_main_menu()
             )
             success += 1
             await asyncio.sleep(0.05)
@@ -989,14 +990,38 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Успешно: {success}\n"
         f"Ошибок: {failed}"
     )
+async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
 
-async def show_subscription(update: Update, user_id: int):
-    pricing_info = (
-        f"\n\n💎 <b>Условия подписки:</b>\n"
-        f"Первые {TRIAL_HOURS} часов — БЕСПЛАТНО\n"
-        f"Далее — всего {int(PRICE_RUB)} рублей в месяц."
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет доступа к этой команде.")
+        return
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users")
+
+    success = 0
+    failed = 0
+
+    for row in rows:
+        target_user_id = row["user_id"]
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="✨ Мы немного обновили меню — теперь пользоваться Шефом стало ещё удобнее.",
+                reply_markup=get_main_menu()
+            )
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+            logger.exception("Ошибка обновления меню user_id=%s", target_user_id)
+
+    await update.message.reply_text(
+        f"✅ Меню обновлено.\n"
+        f"Успешно: {success}\n"
+        f"Ошибок: {failed}"
     )
-
     if user_id == ADMIN_ID:
         await update.message.reply_text(
             f"👑 <b>Тариф:</b> Владелец проекта\n"
@@ -1548,6 +1573,7 @@ async def main():
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("refreshmenu", refresh_menu_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_click))
