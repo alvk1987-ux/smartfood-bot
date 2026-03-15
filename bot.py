@@ -49,7 +49,7 @@ ROBOKASSA_TEST_PASS_2 = os.getenv("ROBOKASSA_TEST_PASS_2", "")
 IS_TEST_MODE = False
 
 PRICE_RUB = 249.00
-TRIAL_HOURS = 48
+TRIAL_HOURS = 24
 PREMIUM_DAYS = 30
 
 OPENAI_BASE_URL = "https://api.proxyapi.ru/openai/v1"
@@ -75,18 +75,12 @@ db_pool = None
 # =========================
 MENU_FREE = [
     ["📖 Как общаться с Шефом"],
-    ["🔍 Найти рецепт", "📷 Рецепт по фото"],
-    ["🧺 Из того, что есть", "📸 Калории по фото"],
-    ["🥗 Рецепты для похудения", "👑 Моя подписка"],
-    ["🕘 История рецептов", "📜 Правовая информация"],
-    ["🛒 Мой список покупок", "⭐ Сохраненные рецепты"],
-    ["💬 Наш чат-форум"],
-]
-
-ONBOARDING_MENU = [
-    ["🧺 Попробовать: Из того, что есть"],
-    ["📷 Попробовать: Рецепт по фото"],
-    ["📸 Попробовать: Калории по фото"],
+    ["🔍 Найти рецепт", "📊 Расчет КБЖУ"],
+    ["🧺 Из того, что есть", "🥗 Рецепты для похудения"],
+    ["📷 Рецепт по фото", "📸 Калории по фото"],
+    ["🕘 История рецептов", "💬 Наш чат-форум"],
+    ["🛒 Мой список покупок", "👑 Моя подписка"],
+    ["⭐ Сохраненные рецепты", "📜 Правовая информация"],
 ]
 
 SYSTEM_PROMPT = """Ты — элитный шеф-повар и профессиональный диетолог.
@@ -113,75 +107,45 @@ SYSTEM_PROMPT = """Ты — элитный шеф-повар и професси
 2. [Шаг 2]"""
 
 GUIDE_TEXT = (
-    "👨‍🍳 <b>Как выжать максимум из Шефа</b>\n\n"
-    "Шеф создан для одного: чтобы вы <b>быстро понимали, что приготовить</b>, "
-    "не тратили время на бесконечный поиск рецептов и могли получать идеи под свою реальную ситуацию.\n\n"
-    "Он помогает, когда:\n"
-    "• не знаете, что приготовить сегодня\n"
-    "• хотите использовать продукты, которые уже есть дома\n"
-    "• хотите более легкие блюда с КБЖУ\n"
-    "• нужно сохранить удачные рецепты и собрать список покупок\n"
-    "• хотите получить рецепт по фото блюда\n\n"
-    "➖➖➖➖➖➖➖➖➖➖\n"
-    "<b>1. Как правильно писать запросы</b>\n"
-    "➖➖➖➖➖➖➖➖➖➖\n\n"
-    "Пишите Шефу так, как будто общаетесь с личным поваром. "
-    "Чем конкретнее запрос, тем полезнее получится результат.\n\n"
-    "<b>Хорошие примеры:</b>\n"
-    "• «Что приготовить из курицы, сыра и макарон»\n"
-    "• «Подбери легкий ужин до 500 ккал»\n"
-    "• «Нужен ужин без молочки и без лука»\n"
-    "• «Хочу что-то необычное из индейки в духовке»\n"
-    "• «Сделай рецепт из творога и яблок»\n\n"
-    "Можно указывать:\n"
-    "• главный продукт\n"
-    "• желаемое время приготовления\n"
-    "• цель: похудение / легкий ужин / сытно / быстро\n"
-    "• ограничения: без лука, без молочки, без сахара и т.д.\n\n"
-    "➖➖➖➖➖➖➖➖➖➖\n"
-    "<b>2. Что делает каждая кнопка</b>\n"
-    "➖➖➖➖➖➖➖➖➖➖\n\n"
-    "<b>🔍 Найти рецепт</b>\n"
-    "Используйте, когда уже примерно знаете, чего хотите.\n\n"
-    "<b>🧺 Из того, что есть</b>\n"
-    "Самая удобная кнопка, когда не хочется идти в магазин. Просто перечислите продукты, и Шеф соберет из них блюдо.\n\n"
-    "<b>🥗 Рецепты для похудения</b>\n"
-    "Когда нужен более легкий вариант с акцентом на КБЖУ.\n\n"
-    "<b>📸 Калории по фото</b>\n"
-    "Отправляете фото еды — Шеф оценивает примерное КБЖУ.\n\n"
-    "<b>📷 Рецепт по фото</b>\n"
-    "Отправляете фото блюда — Шеф предлагает похожий домашний рецепт.\n\n"
-    "<b>🛒 Мой список покупок</b>\n"
-    "Сюда попадают ингредиенты из рецептов, чтобы вы ничего не забыли в магазине.\n\n"
-    "<b>⭐ Сохраненные рецепты</b>\n"
+    "👨‍🍳 <b>Как пользоваться Шефом</b>\n\n"
+    "Шеф — это ваш персональный помощник по рецептам, питанию и идеям для еды.\n\n"
+    "Ниже кратко объясняю, что делает каждая кнопка:\n\n"
+    "🔍 <b>Найти рецепт</b>\n"
+    "Напишите, что хотите приготовить, и Шеф подберет рецепт.\n\n"
+    "🧺 <b>Из того, что есть</b>\n"
+    "Перечислите продукты, которые есть дома, и Шеф предложит вариант блюда.\n\n"
+    "📷 <b>Рецепт по фото</b>\n"
+    "Отправьте фото блюда, и Шеф предложит похожий домашний рецепт.\n\n"
+    "🕘 <b>История рецептов</b>\n"
+    "Здесь хранятся ваши последние рецепты.\n\n"
+    "🛒 <b>Мой список покупок</b>\n"
+    "Сюда добавляются ингредиенты из рецептов.\n\n"
+    "⭐ <b>Сохраненные рецепты</b>\n"
     "Ваши любимые рецепты в одном месте.\n\n"
-    "<b>🕘 История рецептов</b>\n"
-    "Позволяет быстро вернуться к последним рецептам.\n\n"
-    "<b>👑 Моя подписка</b>\n"
+    "📊 <b>Расчет КБЖУ</b>\n"
+    "Шеф попросит данные о вас и рассчитает ориентировочное КБЖУ, воду и даст короткие советы.\n\n"
+    "🥗 <b>Рецепты для похудения</b>\n"
+    "Подбирает более легкие и диетические блюда.\n\n"
+    "📸 <b>Калории по фото</b>\n"
+    "Отправьте фото еды, и Шеф оценит примерное КБЖУ блюда.\n\n"
+    "💬 <b>Наш чат-форум</b>\n"
+    "Переход в сообщество пользователей Шефа.\n\n"
+    "👑 <b>Моя подписка</b>\n"
     "Здесь можно посмотреть статус доступа и оформить VIP.\n\n"
-    "<b>💬 Наш чат-форум</b>\n"
-    "Место, где пользователи делятся блюдами, идеями и вдохновением.\n\n"
+    "📜 <b>Правовая информация</b>\n"
+    "Юридические данные, контакты, оплата и возвраты.\n\n"
     "➖➖➖➖➖➖➖➖➖➖\n"
-    "<b>3. Что означают кнопки под рецептом</b>\n"
+    "<b>Кнопки под рецептом</b>\n"
     "➖➖➖➖➖➖➖➖➖➖\n\n"
-    "<b>🛒 В список покупок</b>\n"
-    "Добавляет ингредиенты рецепта в ваш список продуктов.\n\n"
-    "<b>⭐ Сохранить рецепт</b>\n"
-    "Сохраняет удачный рецепт, чтобы потом быстро его найти.\n\n"
-    "<b>🔄 Заменить продукт</b>\n"
-    "Если рецепт нравится, но хотите что-то изменить — просто скажите, что заменить.\n"
-    "<i>Например: «Убери лук и замени молоко на сливки».</i>\n\n"
-    "<b>🎲 Другой вариант</b>\n"
-    "Если идея не зашла, Шеф сразу предложит новый рецепт по тому же запросу.\n\n"
-    "➖➖➖➖➖➖➖➖➖➖\n"
-    "<b>4. С чего лучше начать прямо сейчас</b>\n"
-    "➖➖➖➖➖➖➖➖➖➖\n\n"
-    "Если хотите быстро понять, насколько это удобно, начните с одной из этих кнопок:\n"
-    "• <b>🧺 Из того, что есть</b> — если хотите приготовить из того, что уже лежит дома\n"
-    "• <b>📷 Рецепт по фото</b> — если хотите получить домашний рецепт по изображению блюда\n"
-    "• <b>📸 Калории по фото</b> — если хотите быстро оценить КБЖУ\n\n"
-    "Шеф создан, чтобы <b>экономить вам время, снимать ежедневную головную боль «что приготовить» и делать готовку проще</b>.\n\n"
-    "Выбирайте кнопку в меню и давайте готовить 👇"
+    "🛒 <b>В список покупок</b>\n"
+    "Добавляет ингредиенты рецепта в список покупок.\n\n"
+    "⭐ <b>Сохранить рецепт</b>\n"
+    "Сохраняет рецепт в избранное.\n\n"
+    "🔄 <b>Заменить продукт</b>\n"
+    "Позволяет изменить ингредиенты в рецепте.\n\n"
+    "🎲 <b>Другой вариант</b>\n"
+    "Шеф предложит другой рецепт по тому же запросу.\n\n"
+    "Выбирайте нужную кнопку в меню и начинаем 👇"
 )
 
 LEGAL_TEXT = (
@@ -284,11 +248,10 @@ async def init_db():
             )
         """)
 
+
 def get_main_menu():
     return ReplyKeyboardMarkup(MENU_FREE, resize_keyboard=True)
 
-def get_onboarding_menu():
-    return ReplyKeyboardMarkup(ONBOARDING_MENU, resize_keyboard=True)
 
 async def log_event(user_id: int, event_name: str, event_value: str = None):
     try:
@@ -299,6 +262,7 @@ async def log_event(user_id: int, event_name: str, event_value: str = None):
             )
     except Exception:
         logger.exception("Ошибка записи события")
+
 
 async def upsert_user(user_id: int, username: str = None, source: str = None):
     async with db_pool.acquire() as conn:
@@ -312,9 +276,11 @@ async def upsert_user(user_id: int, username: str = None, source: str = None):
                 last_seen_at = CURRENT_TIMESTAMP
         """, user_id, username, source)
 
+
 async def get_user_row(user_id: int):
     async with db_pool.acquire() as conn:
         return await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+
 
 async def check_access(user_id: int):
     if user_id == ADMIN_ID:
@@ -331,6 +297,7 @@ async def check_access(user_id: int):
     diff = datetime.datetime.now() - row["created_at"]
     return (diff.total_seconds() / 3600) < TRIAL_HOURS
 
+
 async def trial_hours_left(user_id: int):
     row = await get_user_row(user_id)
     if not row:
@@ -343,13 +310,12 @@ async def trial_hours_left(user_id: int):
     diff = datetime.datetime.now() - row["created_at"]
     return int(max(0, TRIAL_HOURS - (diff.total_seconds() / 3600)))
 
-def get_bot_link():
-    return f"https://t.me/{BOT_USERNAME}"
 
 def build_payment_keyboard(payment_url: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"💎 Оплатить VIP за {int(PRICE_RUB)} ₽", url=payment_url)]
     ])
+
 
 def get_payment_link(user_id: int):
     amount = f"{PRICE_RUB:.2f}"
@@ -374,6 +340,7 @@ def get_payment_link(user_id: int):
 
     return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urllib.parse.urlencode(params)
 
+
 async def schedule_trial_end_messages(user_id: int):
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT created_at FROM users WHERE user_id = $1", user_id)
@@ -395,6 +362,7 @@ async def schedule_trial_end_messages(user_id: int):
                 VALUES ($1, 'trial_end_12h', $2),
                        ($1, 'trial_end_24h', $3)
             """, user_id, send_1, send_2)
+
 
 async def send_due_scheduled_messages(app: Application):
     while True:
@@ -443,6 +411,7 @@ async def send_due_scheduled_messages(app: Application):
 
         await asyncio.sleep(60)
 
+
 async def is_rate_limited(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -488,12 +457,14 @@ async def is_rate_limited(user_id: int):
 
         return False, None
 
+
 async def save_recipe_history(user_id: int, recipe_text: str, source_mode: str = None):
     async with db_pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO recipe_history (user_id, recipe_text, source_mode)
             VALUES ($1, $2, $3)
         """, user_id, recipe_text, source_mode)
+
 
 async def save_recipe_item(user_id: int, recipe_text: str):
     title_match = re.search(r'«(.+?)»', recipe_text)
@@ -503,6 +474,7 @@ async def save_recipe_item(user_id: int, recipe_text: str):
             INSERT INTO saved_recipes (user_id, title, recipe_text)
             VALUES ($1, $2, $3)
         """, user_id, title, recipe_text)
+
 
 async def get_last_history(user_id: int, limit: int = 10):
     async with db_pool.acquire() as conn:
@@ -514,6 +486,7 @@ async def get_last_history(user_id: int, limit: int = 10):
             LIMIT $2
         """, user_id, limit)
 
+
 async def get_saved_recipes(user_id: int, limit: int = 20):
     async with db_pool.acquire() as conn:
         return await conn.fetch("""
@@ -524,13 +497,16 @@ async def get_saved_recipes(user_id: int, limit: int = 20):
             LIMIT $2
         """, user_id, limit)
 
+
 async def clear_saved_recipes(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM saved_recipes WHERE user_id = $1", user_id)
 
+
 async def clear_history(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM recipe_history WHERE user_id = $1", user_id)
+
 
 async def add_to_shopping_list(user_id: int, ingredients: str):
     async with db_pool.acquire() as conn:
@@ -543,19 +519,23 @@ async def add_to_shopping_list(user_id: int, ingredients: str):
             WHERE user_id = $1
         """, user_id, ingredients)
 
+
 async def get_shopping_list(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT shopping_list FROM users WHERE user_id = $1", user_id)
         return row["shopping_list"] if row and row["shopping_list"] else ""
 
+
 async def clear_shopping_list(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET shopping_list = '' WHERE user_id = $1", user_id)
+
 
 async def activate_premium(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT premium_until FROM users WHERE user_id = $1", user_id)
         now = datetime.datetime.now()
+
         if row and row["premium_until"] and row["premium_until"] > now:
             base_date = row["premium_until"]
         else:
@@ -566,6 +546,7 @@ async def activate_premium(user_id: int):
             UPDATE users SET premium_until = $2 WHERE user_id = $1
         """, user_id, new_premium_until)
         return new_premium_until
+
 
 async def call_text_model(messages):
     try:
@@ -586,6 +567,7 @@ async def call_text_model(messages):
             timeout=REQUEST_TIMEOUT_SECONDS
         )
 
+
 async def generate_recipe(user_id: int, source_mode: str, user_prompt: str):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -597,6 +579,45 @@ async def generate_recipe(user_id: int, source_mode: str, user_prompt: str):
     await log_event(user_id, "recipe_generated", source_mode)
     return recipe_text
 
+
+async def calculate_kbju(user_text: str):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты опытный нутрициолог. "
+                "На основе данных пользователя рассчитай ориентировочное КБЖУ на день. "
+                "Не показывай формулы, расчеты, длинные объяснения и теорию. "
+                "Ответ должен быть только на русском языке, коротким, понятным и строго в таком формате:\n\n"
+                "📊 Ваше КБЖУ\n\n"
+                "🔥 Калории: ... ккал\n"
+                "🥩 Белки: ... г\n"
+                "🥑 Жиры: ... г\n"
+                "🌾 Углеводы: ... г\n\n"
+                "💧 Вода:\n"
+                "• ориентир: ... л воды в день\n\n"
+                "Примеры продуктов:\n"
+                "🥩 Белки: ...\n"
+                "🥑 Жиры: ...\n"
+                "🌾 Углеводы: ...\n\n"
+                "Короткие рекомендации:\n"
+                "• ...\n"
+                "• ...\n"
+                "• ...\n\n"
+                "Примеры продуктов должны быть простыми и понятными. "
+                "Советы должны быть короткими, без медицинских терминов."
+            )
+        },
+        {
+            "role": "user",
+            "content": user_text
+        }
+    ]
+
+    response = await call_text_model(messages)
+    return response.choices[0].message.content
+
+
 def recipe_actions_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🛒 В список покупок", callback_data="add_to_cart")],
@@ -604,6 +625,7 @@ def recipe_actions_keyboard():
         [InlineKeyboardButton("🔄 Заменить продукт", callback_data="replace_btn")],
         [InlineKeyboardButton("🎲 Другой вариант", callback_data="another_recipe")],
     ])
+
 
 # =========================
 # ADMIN STATS
@@ -618,7 +640,7 @@ async def get_admin_stats_data():
         expired_trial = await conn.fetchval("""
             SELECT COUNT(*) FROM users
             WHERE (premium_until IS NULL OR premium_until <= CURRENT_TIMESTAMP)
-              AND created_at <= CURRENT_TIMESTAMP - INTERVAL '48 hours'
+              AND created_at <= CURRENT_TIMESTAMP - INTERVAL '24 hours'
         """)
         total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
         revenue = await conn.fetchval("SELECT COALESCE(SUM(amount), 0) FROM payments")
@@ -684,6 +706,7 @@ async def get_admin_stats_data():
         "top_sources": top_sources,
     }
 
+
 async def get_admin_stats_text():
     data = await get_admin_stats_data()
 
@@ -712,6 +735,7 @@ async def get_admin_stats_text():
         f"• Фото-функции: <b>{data['photo_today']}</b>\n\n"
         f"🔗 <b>Топ источников трафика</b>\n{source_block}"
     )
+
 
 async def get_admin_sources_text():
     async with db_pool.acquire() as conn:
@@ -749,6 +773,7 @@ async def get_admin_sources_text():
             f"• ARPPU: {arppu:.2f} ₽"
         )
     return "\n".join(lines)
+
 
 async def get_admin_today_text():
     async with db_pool.acquire() as conn:
@@ -807,6 +832,7 @@ async def get_admin_today_text():
         f"💎 ARPPU: <b>{arppu:.2f} ₽</b>"
     )
 
+
 def admin_stats_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Общая статистика", callback_data="admin_stats_general")],
@@ -815,6 +841,7 @@ def admin_stats_keyboard():
         [InlineKeyboardButton("🎁 Выдать VIP", callback_data="give_premium")],
         [InlineKeyboardButton("🗑 Удалить пользователя", callback_data="delete_user")],
     ])
+
 
 # =========================
 # PAYMENT
@@ -873,6 +900,7 @@ async def robokassa_handler(request):
         logger.exception("Ошибка в robokassa_handler")
         return web.Response(text="ERROR", status=500)
 
+
 # =========================
 # HANDLERS
 # =========================
@@ -888,13 +916,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"👨‍🍳 Добро пожаловать, {user.first_name}!\n\n"
         "Я ваш личный Премиальный Шеф.\n\n"
-        f"🎁 Вам начислено <b>{TRIAL_HOURS} часов бесплатного VIP-доступа</b>.\n\n"
-        "Чтобы было проще начать, вот 3 самых удобных сценария:"
+        "🎁 Вам доступен <b>пробный период 24 часа</b>.\n\n"
+        "Выберите нужную кнопку в меню ниже и начнем 👇"
     )
 
     await update.message.reply_text(
         text,
-        reply_markup=get_onboarding_menu(),
+        reply_markup=get_main_menu(),
         parse_mode="HTML"
     )
 
@@ -911,6 +939,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await schedule_trial_end_messages(user.id)
 
+
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -922,6 +951,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=admin_stats_keyboard(),
         parse_mode="HTML"
     )
+
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -947,6 +977,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Выручка: <b>{data['revenue_today']:.2f} ₽</b>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -974,10 +1005,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = row["user_id"]
         try:
             await context.bot.send_message(
-    chat_id=target_user_id,
-    text="👨‍🍳 Что готовим сегодня? Выберите рецепт в меню ниже.",
-    reply_markup=get_main_menu()
-)
+                chat_id=target_user_id,
+                text=text,
+                reply_markup=get_main_menu()
+            )
             success += 1
             await asyncio.sleep(0.05)
         except Exception:
@@ -989,6 +1020,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Успешно: {success}\n"
         f"Ошибок: {failed}"
     )
+
+
 async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -1007,7 +1040,7 @@ async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(
                 chat_id=target_user_id,
-                text="✨ Мы немного обновили меню — теперь пользоваться Шефом стало ещё удобнее.",
+                text="✨ Мы обновили меню и пробный период. Теперь пользоваться Шефом стало ещё удобнее.",
                 reply_markup=get_main_menu()
             )
             success += 1
@@ -1021,6 +1054,8 @@ async def refresh_menu_command(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Успешно: {success}\n"
         f"Ошибок: {failed}"
     )
+
+
 async def show_subscription(update: Update, user_id: int):
     pricing_info = (
         f"\n\n💳 <b>VIP на {PREMIUM_DAYS} дней</b> — {int(PRICE_RUB)} ₽\n"
@@ -1055,23 +1090,25 @@ async def show_subscription(update: Update, user_id: int):
         if hours_left <= 0:
             await update.message.reply_text(
                 f"👑 <b>Тариф:</b> Истек ❌\n"
-                "⏳ Ваш бесплатный период завершен.\n\n"
+                "⏳ Ваш пробный период 24 часа завершен.\n\n"
                 f"Оформите подписку, чтобы продолжить!{pricing_info}",
                 reply_markup=pay_keyboard,
                 parse_mode="HTML"
             )
         else:
             await update.message.reply_text(
-                f"👑 <b>Тариф:</b> Пробный VIP\n"
-                f"⏳ <b>Осталось:</b> {hours_left} часов{pricing_info}",
+                f"👑 <b>Тариф:</b> Пробный период\n"
+                f"⏳ <b>Осталось:</b> {hours_left} ч.{pricing_info}",
                 reply_markup=pay_keyboard,
                 parse_mode="HTML"
             )
 
     await log_event(user_id, "subscription_opened")
-    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text.strip()
+    text = (update.message.text or "").strip()
 
     await upsert_user(user_id, update.effective_user.username)
     state = context.user_data.get("state", "start")
@@ -1130,6 +1167,8 @@ async def show_subscription(update: Update, user_id: int):
                 await conn.execute("DELETE FROM recipe_history WHERE user_id = $1", target_id)
                 await conn.execute("DELETE FROM rate_limits WHERE user_id = $1", target_id)
                 await conn.execute("DELETE FROM scheduled_messages WHERE user_id = $1", target_id)
+                await conn.execute("DELETE FROM payments WHERE user_id = $1", target_id)
+                await conn.execute("DELETE FROM events WHERE user_id = $1", target_id)
 
             await update.message.reply_text(f"✅ Пользователь {target_id} удален из базы!")
             context.user_data["state"] = "start"
@@ -1138,46 +1177,33 @@ async def show_subscription(update: Update, user_id: int):
             await update.message.reply_text("❌ Ошибка. Пришлите только цифры ID.")
         return
 
-    if text == "🧺 Попробовать: Из того, что есть":
-        context.user_data["state"] = "from_fridge"
-        await update.message.reply_text(
-            "Напишите продукты, которые у вас есть (через запятую).",
-            reply_markup=get_main_menu()
-        )
-        return
-
-    if text == "📷 Попробовать: Рецепт по фото":
-        context.user_data["state"] = "recipe_from_photo"
-        await update.message.reply_text(
-            "📷 <b>Отправьте фото блюда</b>\n\n"
-            "Я посмотрю, что на нём изображено, и предложу вам похожий домашний рецепт 👨‍🍳\n\n"
-            "Лучше всего подходят:\n"
-            "• фото готового блюда\n"
-            "• хорошее освещение\n"
-            "• блюдо крупным планом",
-            parse_mode="HTML",
-            reply_markup=get_main_menu()
-        )
-        return
-
-    if text == "📸 Попробовать: Калории по фото":
-        context.user_data["state"] = "photo_calories"
-        await update.message.reply_text(
-            "📸 Отправьте фото вашей еды.",
-            reply_markup=get_main_menu()
-        )
-        return
-
     has_access = await check_access(user_id)
     if not has_access:
         payment_url = get_payment_link(user_id)
         kb = build_payment_keyboard(payment_url)
         await update.message.reply_text(
-            "⏳ <b>Ваш бесплатный период подошел к концу!</b>\n\n"
+            "⏳ <b>Ваш пробный период 24 часа завершен!</b>\n\n"
             "Доступ к рецептам, списку покупок и сохранениям сейчас закрыт.\n\n"
             "Чтобы продолжить пользоваться Шефом, откройте «👑 Моя подписка».",
             parse_mode="HTML",
             reply_markup=kb
+        )
+        return
+
+    if text == "📊 Расчет КБЖУ":
+        context.user_data["state"] = "kbju_calculator"
+        await update.message.reply_text(
+            "📊 <b>Расчет КБЖУ</b>\n\n"
+            "Отправьте данные о себе одним сообщением:\n\n"
+            "• пол\n"
+            "• возраст\n"
+            "• рост\n"
+            "• вес\n"
+            "• уровень активности\n"
+            "• цель\n\n"
+            "Пример:\n"
+            "Женщина, 29 лет, рост 168 см, вес 64 кг, активность средняя, цель похудение",
+            parse_mode="HTML"
         )
         return
 
@@ -1283,7 +1309,7 @@ async def show_subscription(update: Update, user_id: int):
         await log_event(user_id, "history_opened")
         return
 
-    if state in ["find_recipe", "from_fridge", "diet_recipe", "replace_ingredient"]:
+    if state in ["find_recipe", "from_fridge", "diet_recipe", "replace_ingredient", "kbju_calculator"]:
         limited, reason = await is_rate_limited(user_id)
         if limited:
             await update.message.reply_text(f"⏳ {reason}")
@@ -1291,7 +1317,19 @@ async def show_subscription(update: Update, user_id: int):
 
         await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
+        if state == "kbju_calculator":
+            try:
+                result = await calculate_kbju(text)
+                await update.message.reply_text(result, parse_mode="HTML")
+                await log_event(user_id, "kbju_calculated")
+                context.user_data["state"] = "start"
+            except Exception:
+                logger.exception("Ошибка расчета КБЖУ")
+                await update.message.reply_text("❌ Не удалось рассчитать КБЖУ. Попробуйте отправить данные еще раз.")
+            return
+
         last_recipe = context.user_data.get("last_recipe", "")
+
         if state == "replace_ingredient":
             user_prompt = (
                 f"Вот прошлый рецепт:\n{last_recipe}\n\n"
@@ -1327,6 +1365,7 @@ async def show_subscription(update: Update, user_id: int):
     context.user_data["state"] = "find_recipe"
     await update.message.reply_text("Напишите, какой рецепт вы хотите найти.")
 
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = context.user_data.get("state", "start")
@@ -1336,7 +1375,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_url = get_payment_link(user_id)
         kb = build_payment_keyboard(payment_url)
         await update.message.reply_text(
-            "⏳ Ваш бесплатный период подошел к концу. Оформите подписку, чтобы продолжить.",
+            "⏳ Ваш пробный период 24 часа завершен. Оформите подписку, чтобы продолжить.",
             reply_markup=kb
         )
         return
@@ -1389,7 +1428,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "В конце добавь одну короткую аппетитную фразу, например: «Приятного аппетита! 😋»"
             )
             event_name = "recipe_from_photo"
-
         else:
             await update.message.reply_text(
                 "Сначала выберите нужную функцию: «📸 Калории по фото» или «📷 Рецепт по фото»."
@@ -1427,6 +1465,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Ошибка анализа фото")
         await update.message.reply_text("❌ Не удалось обработать фото. Попробуйте другое изображение.")
+
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1473,7 +1512,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_access and query.data not in ["clear_saved", "clear_history", "clear_list"]:
         await context.bot.send_message(
             chat_id=user_id,
-            text="⏳ Ваш бесплатный период завершен. Функция заблокирована 🔒"
+            text="⏳ Ваш пробный период 24 часа завершен. Функция заблокирована 🔒"
         )
         return
 
@@ -1565,8 +1604,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user_id, text="❌ Не удалось очистить историю.")
         return
 
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Ошибка во время обработки апдейта", exc_info=context.error)
+
 
 async def main():
     await init_db()
@@ -1611,6 +1652,7 @@ async def main():
                     await scheduler_task
                 except asyncio.CancelledError:
                     pass
+
 
 if __name__ == "__main__":
     asyncio.run(main())
