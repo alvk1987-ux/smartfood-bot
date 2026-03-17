@@ -993,7 +993,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    text = " ".join(context.args)
+    text = update.message.text.partition(' ')[2]
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users")
