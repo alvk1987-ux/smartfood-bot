@@ -986,14 +986,14 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ У вас нет доступа к этой команде.")
         return
 
-    if not context.args:
+    text = update.message.text.partition(' ')[2]
+
+    if not text.strip():
         await update.message.reply_text(
             "Использование:\n"
             "/broadcast текст сообщения"
         )
         return
-
-    text = update.message.text.partition(' ')[2]
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users")
